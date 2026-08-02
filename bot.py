@@ -293,7 +293,7 @@ def handle_all_messages(message):
                     user_states[user_id]['display_amount'] = input_val
                     user_states[user_id]['state'] = 'withdraw_address'
                     
-                    ask_str = "UPI ID" if method == "🏦 UPI" else "USDT (TRC20/BEP20) Address"
+                    ask_str = "UPI ID" if method == "🏦 UPI" else "USDT (BEP20) Address"
                     markup = InlineKeyboardMarkup()
                     markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
                     bot.send_message(user_id, f"✅ Amount saved: {input_val} {'₹' if method == '🏦 UPI' else '$'}\n\n👉 Ab apna *{ask_str}* bhejein:", parse_mode="Markdown", reply_markup=markup)
