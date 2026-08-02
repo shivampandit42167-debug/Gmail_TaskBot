@@ -127,7 +127,7 @@ def handle_all_messages(message):
             admin_msg = f"🔔 <b>NEW GMAIL TASK SUBMISSION</b>\n\n👤 <b>User ID:</b> <code>{user_id}</code>\n\nPlease check screenshot."
             bot.send_photo(ADMIN_ID, file_id, caption=admin_msg, parse_mode="HTML", reply_markup=markup)
             
-            bot.send_message(user_id, "✅ *Proof Submitted!*\nAapka screenshot Admin ko bhej diya gaya hai.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+            bot.send_message(user_id, "✅ *Proof Submitted!*\nAapka screenshot Admin ko bhej diya gaya hai Checking Time 14-24Hrs Be Patient.", parse_mode="Markdown", reply_markup=main_menu(user_id))
             del user_states[user_id]
             return
         else:
