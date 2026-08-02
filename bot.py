@@ -254,7 +254,7 @@ def handle_all_messages(message):
                 gmail_pass = text.strip()
                 gmail_email = state_data['gmail_email']
                 
-                bot.send_message(user_id, "✅ *Old Gmail Submitted!*\nAapka task Admin ke paas bhej diya gaya hai.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+                bot.send_message(user_id, "✅ *Old Gmail Submitted!*\nAapka task Admin ke paas bhej diya gaya hai Checking Ka Wait Kare Processing Time 14-15Hrs Be Patient.", parse_mode="Markdown", reply_markup=main_menu(user_id))
                 
                 markup = InlineKeyboardMarkup()
                 markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"oldappr_{user_id}"),
@@ -439,7 +439,7 @@ def callback_query(call):
         target_user = int(data.split("_")[1])
         bot.answer_callback_query(call.id, "Processing...")
         try:
-            bot.send_message(target_user, "❌ *Task Rejected!*\nAapka Gmail Task reject kar diya gaya hai.", parse_mode="Markdown")
+            bot.send_message(target_user, "❌ *Task Rejected!*\nAapka Gmail Task reject kar diya gaya hai Reason Aap Khud Check Karle Invalid.", parse_mode="Markdown")
         except: pass
         try:
             bot.edit_message_caption(f"❌ Task Rejected for <code>{target_user}</code> (Done)", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=None)
