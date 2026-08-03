@@ -152,7 +152,7 @@ def handle_all_messages(message):
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
             msg = ("📧 *OLD GMAIL TASK*\n\n"
-                   "👉 Kripya apna valid **Old Gmail Account** yahan bhejein (jaise: `example@gmail.com`):")
+                   "👉 Kripya apna valid **Old Gmail Account** yahan bhejein Gmail Sirf 1-3Days Old Allow No Verification Gmail 5+ Days Old Not Accepted (jaise: `example@gmail.com`):")
             bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=markup)
             user_states[user_id] = {'state': 'old_gmail_email'}
 
