@@ -7,7 +7,7 @@ import time
 # --- CONFIGURATION ---
 TOKEN = '8683212510:AAEdE8kq5-5GuKerfPa_Mzaxovgb-J5VU4w'
 ADMIN_ID = 8894779077  
-ADMIN_USERNAME = 'Verified_Bandaa' 
+ADMIN_USERNAME = '@Raka_01 / @Verified_Bandaa' 
 
 # Conversion Rate: 1 USDT = ₹94
 USDT_TO_INR_RATE = 94.0  
@@ -127,7 +127,7 @@ def handle_all_messages(message):
             admin_msg = f"🔔 <b>NEW GMAIL TASK SUBMISSION</b>\n\n👤 <b>User ID:</b> <code>{user_id}</code>\n\nPlease check screenshot."
             bot.send_photo(ADMIN_ID, file_id, caption=admin_msg, parse_mode="HTML", reply_markup=markup)
             
-            bot.send_message(user_id, "✅ *Proof Submitted!*\nAapka screenshot Admin ko bhej diya gaya hai.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+            bot.send_message(user_id, "✅ *Proof Submitted!*\nAapka screenshot Admin ko bhej diya gaya hai Time 14-15Hrs Be patient.", parse_mode="Markdown", reply_markup=main_menu(user_id))
             del user_states[user_id]
             return
         else:
@@ -254,7 +254,7 @@ def handle_all_messages(message):
                 gmail_pass = text.strip()
                 gmail_email = state_data['gmail_email']
                 
-                bot.send_message(user_id, "✅ *Old Gmail Submitted!*\nAapka task Admin ke paas bhej diya gaya hai.", parse_mode="Markdown", reply_markup=main_menu(user_id))
+                bot.send_message(user_id, "✅ *Old Gmail Submitted!*\nAapka task Admin ke paas bhej diya gaya hai 14-15Hrs Be Patient.", parse_mode="Markdown", reply_markup=main_menu(user_id))
                 
                 markup = InlineKeyboardMarkup()
                 markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"oldappr_{user_id}"),
@@ -293,7 +293,7 @@ def handle_all_messages(message):
                     user_states[user_id]['display_amount'] = input_val
                     user_states[user_id]['state'] = 'withdraw_address'
                     
-                    ask_str = "UPI ID" if method == "🏦 UPI" else "USDT (TRC20/BEP20) Address"
+                    ask_str = "UPI ID" if method == "🏦 UPI" else "USDT (BEP20) Address"
                     markup = InlineKeyboardMarkup()
                     markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
                     bot.send_message(user_id, f"✅ Amount saved: {input_val} {'₹' if method == '🏦 UPI' else '$'}\n\n👉 Ab apna *{ask_str}* bhejein:", parse_mode="Markdown", reply_markup=markup)
