@@ -141,7 +141,7 @@ def handle_all_messages(message):
                    "💰 *Reward:* ₹15\n\n"
                    "⚠️ *Instructions & Rules:*\n"
                    "Rule - Create a new Gmail account.\n"
-                   "Password must be - `ethicbro999`\n\n"
+                   "Password must be - `Raka@123`\n\n"
                    "👉 *Complete the task and click the button below!*")
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton("✅ Click Here When Done", callback_data="task_done"))
