@@ -10,8 +10,7 @@ OWNER_ID = 8894779077  # Main Super Admin ID
 ADMIN_USERNAME = 'Raka_01'  
 
 # 👉 Tumhara Naya Neon.tech PostgreSQL Database URL 👈
-DATABASE_URL = 'postgresql://neondb_owner:npg_TFXNmVEARt72@ep-twilight-sunset-axd07o2j-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require' 
-
+DATABASE_URL = 'postgresql://neondb_owner:npg_TFXNmVEARt72@ep-twilight-sunset-axd07o2j-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require'
 # Conversion Rate: 1 USDT = ₹94
 USDT_TO_INR_RATE = 94.0  
 
@@ -610,6 +609,7 @@ def callback_query(call):
         user_states[user_id] = {'state': 'admin_set_gmail_pass'}
         bot.send_message(user_id, f"🔑 Naya Gmail Task Password type karke bhejein (Current: <code>{get_setting('gmail_password')}</code>):", parse_mode="HTML")
 
+    # 👉 FIX: History Retrieval Safe from HTML Crashes
     elif data == "admin_approved_list" and is_admin(user_id):
         records = run_query("SELECT user_id, method, address, amount, date FROM approved_withdraws ORDER BY id DESC LIMIT 15", fetch='all')
         if not records:
@@ -617,8 +617,20 @@ def callback_query(call):
         else:
             msg = "📜 <b>APPROVED WITHDRAWALS HISTORY:</b>\n\n"
             for r in records:
-                msg += f"👤 <code>{r[0]}</code> | {r[1]} | 💰 {r[3]} | 📌 <code>{r[2]}</code>\n📅 {r[4]}\n\n"
-            bot.send_message(user_id, msg, parse_mode="HTML")
+                curr_symbol = "₹" if r[1] == "🏦 UPI" else "$"
+                # User agar address me < ya > daal de toh crash na ho isliye escape lagaya hai
+                safe_addr = str(r[2]).replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;")
+                msg += f"👤 <code>{r[0]}</code> | {r[1]} | 💰 {curr_symbol}{r[3]} | 📌 <code>{safe_addr}</code>\n📅 {r[4]}\n\n"
+            
+            if len(msg) > 4000:
+                msg = msg[:4000] + "\n\n⚠️ (Limit reached, Showing latest)"
+                
+            try:
+                bot.send_message(user_id, msg, parse_mode="HTML")
+                bot.answer_callback_query(call.id)
+            except Exception as e:
+                bot.answer_callback_query(call.id, "⚠️ History dikhane me error aaya.", show_alert=True)
+                print(f"History Output Error: {e}")
 
     elif data == "admin_back" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
@@ -693,18 +705,25 @@ def callback_query(call):
         except:
             bot.edit_message_text(f"❌ Task Rejected for <code>{target_user}</code> (Done)", call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
+    # 👉 FIX: DB Crash Proof Insertion (Silent Fail ko pakad liya gaya hai)
     elif data.startswith("apprw_") and is_admin(user_id): 
         pending_id = int(data.split("_")[1])
         req = run_query("SELECT user_id, amount, method, address FROM pending_withdraws WHERE id=%s", (pending_id,), fetch='one')
         if req:
             target_user, display_amount, method, address = req
-            curr_symbol = "₹" if method == "🏦 UPI" else "$"
-            bot.answer_callback_query(call.id, "Processing...")
             
             date_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-            run_query("INSERT INTO approved_withdraws (user_id, method, address, amount, date) VALUES (%s, %s, %s, %s, %s)", 
-                      (target_user, method, address, f"{curr_symbol}{display_amount}", date_now), commit=True)
-
+            
+            # Yahan enforce kiya hai ki error aane par aage ka process (jaise delete karna) na ho
+            insert_check = run_query("INSERT INTO approved_withdraws (user_id, method, address, amount, date) VALUES (%s, %s, %s, %s, %s) RETURNING id", 
+                                     (int(target_user), str(method), str(address), float(display_amount), str(date_now)), fetch='id', commit=True)
+            
+            if not insert_check:
+                bot.answer_callback_query(call.id, "⚠️ Database Error! History save nahi hui, kripya dobara try karein.", show_alert=True)
+                return
+                
+            bot.answer_callback_query(call.id, "Processing...")
+            curr_symbol = "₹" if method == "🏦 UPI" else "$"
             try:
                 bot.send_message(target_user, f"🎉 *Payment Sent!*\nAapka {method} withdrawal of {curr_symbol}{display_amount} successful ho gaya hai!", parse_mode="Markdown")
             except: pass
@@ -735,5 +754,5 @@ def callback_query(call):
             bot.answer_callback_query(call.id, "⚠️ Already processed or invalid request!", show_alert=True)
 
 # --- START BOT ---
-print("Bot running with new Token, DB and Fixed Flow...")
+print("Bot Database Crash Fixed & Approval Safety Added!")
 bot.polling(none_stop=True)
