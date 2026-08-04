@@ -1,88 +1,99 @@
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-import sqlite3
+import psycopg2
 import datetime
 import time
 
 # --- CONFIGURATION ---
 TOKEN = '8683212510:AAEdE8kq5-5GuKerfPa_Mzaxovgb-J5VU4w'
 ADMIN_ID = 8894779077  
-ADMIN_USERNAME = 'Raka_01'  # Updated Admin Username
+ADMIN_USERNAME = 'Raka_01'  
+
+# 👉 Tumhara Neon.tech PostgreSQL Database URL 👈
+DATABASE_URL = 'postgresql://neondb_owner:npg_TFXNmVEARt72@ep-twilight-sunset-axd07o2j-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require' 
 
 # Conversion Rate: 1 USDT = ₹94
 USDT_TO_INR_RATE = 94.0  
 
 bot = telebot.TeleBot(TOKEN)
-
-# --- DATABASE SETUP ---
-conn = sqlite3.connect('bot_database.db', check_same_thread=False)
-cursor = conn.cursor()
-
-cursor.execute('''CREATE TABLE IF NOT EXISTS users
-                  (user_id INTEGER PRIMARY KEY, balance REAL DEFAULT 0)''')
-cursor.execute('''CREATE TABLE IF NOT EXISTS history
-                  (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, type TEXT, amount REAL, detail TEXT, date TEXT)''')
-cursor.execute('''CREATE TABLE IF NOT EXISTS pending_withdraws
-                  (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, method TEXT, address TEXT, amount REAL)''')
-cursor.execute('''CREATE TABLE IF NOT EXISTS settings
-                  (key TEXT PRIMARY KEY, value TEXT)''')
-conn.commit()
-
-# Default settings setup
-default_settings = {
-    'gmail_task': 'ON',
-    'old_gmail_task': 'ON',
-    'withdraw': 'ON',
-    'min_upi': '15.0',
-    'min_usdt': '0.16'
-}
-for k, v in default_settings.items():
-    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
-conn.commit()
-
 user_states = {}
+
+# --- DATABASE CONNECTION HELPER ---
+def run_query(query, params=(), fetch=None, commit=False):
+    conn = psycopg2.connect(DATABASE_URL)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(query, params)
+        if commit:
+            conn.commit()
+        if fetch == 'one':
+            return cursor.fetchone()
+        elif fetch == 'all':
+            return cursor.fetchall()
+        elif fetch == 'id':
+            return cursor.fetchone()[0]
+    finally:
+        cursor.close()
+        conn.close()
+
+# --- DATABASE SETUP (POSTGRESQL) ---
+def init_db():
+    run_query('''CREATE TABLE IF NOT EXISTS users
+                 (user_id BIGINT PRIMARY KEY, balance FLOAT DEFAULT 0)''', commit=True)
+    run_query('''CREATE TABLE IF NOT EXISTS history
+                 (id SERIAL PRIMARY KEY, user_id BIGINT, type TEXT, amount FLOAT, detail TEXT, date TEXT)''', commit=True)
+    run_query('''CREATE TABLE IF NOT EXISTS pending_withdraws
+                 (id SERIAL PRIMARY KEY, user_id BIGINT, method TEXT, address TEXT, amount FLOAT)''', commit=True)
+    run_query('''CREATE TABLE IF NOT EXISTS settings
+                 (key TEXT PRIMARY KEY, value TEXT)''', commit=True)
+    
+    default_settings = {
+        'gmail_task': 'ON',
+        'old_gmail_task': 'ON',
+        'withdraw': 'ON',
+        'min_upi': '15.0',
+        'min_usdt': '0.16'
+    }
+    for k, v in default_settings.items():
+        run_query("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", (k, v), commit=True)
+
+init_db()
 
 # --- HELPER FUNCTIONS ---
 def get_setting(key):
-    cursor.execute("SELECT value FROM settings WHERE key=?", (key,))
-    res = cursor.fetchone()
+    res = run_query("SELECT value FROM settings WHERE key=%s", (key,), fetch='one')
     return res[0] if res else 'ON'
 
 def update_setting(key, value):
-    cursor.execute("UPDATE settings SET value=? WHERE key=?", (str(value), key))
-    conn.commit()
+    run_query("UPDATE settings SET value=%s WHERE key=%s", (str(value), key), commit=True)
 
 def get_balance(user_id):
-    cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
-    result = cursor.fetchone()
-    if result:
-        return result[0]
+    res = run_query("SELECT balance FROM users WHERE user_id=%s", (user_id,), fetch='one')
+    if res:
+        return res[0]
     else:
-        cursor.execute("INSERT INTO users (user_id, balance) VALUES (?, ?)", (user_id, 0))
-        conn.commit()
+        run_query("INSERT INTO users (user_id, balance) VALUES (%s, %s)", (user_id, 0), commit=True)
         return 0
 
 def add_balance(user_id, amount, detail):
     current = get_balance(user_id)
     new_balance = current + amount
-    cursor.execute("UPDATE users SET balance=? WHERE user_id=?", (new_balance, user_id))
+    run_query("UPDATE users SET balance=%s WHERE user_id=%s", (new_balance, user_id), commit=True)
     date_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute("INSERT INTO history (user_id, type, amount, detail, date) VALUES (?, ?, ?, ?, ?)", 
-                   (user_id, "CREDIT", amount, detail, date_now))
-    conn.commit()
+    run_query("INSERT INTO history (user_id, type, amount, detail, date) VALUES (%s, %s, %s, %s, %s)", 
+              (user_id, "CREDIT", amount, detail, date_now), commit=True)
 
 def deduct_balance(user_id, amount, detail):
     current = get_balance(user_id)
     new_balance = current - amount
-    cursor.execute("UPDATE users SET balance=? WHERE user_id=?", (new_balance, user_id))
+    run_query("UPDATE users SET balance=%s WHERE user_id=%s", (new_balance, user_id), commit=True)
     date_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute("INSERT INTO history (user_id, type, amount, detail, date) VALUES (?, ?, ?, ?, ?)", 
-                   (user_id, "DEBIT", amount, detail, date_now))
-    conn.commit()
+    run_query("INSERT INTO history (user_id, type, amount, detail, date) VALUES (%s, %s, %s, %s, %s)", 
+              (user_id, "DEBIT", amount, detail, date_now), commit=True)
 
 def get_all_users():
-    cursor.execute("SELECT user_id FROM users")
-    return [row[0] for row in cursor.fetchall()]
+    records = run_query("SELECT user_id FROM users", fetch='all')
+    return [row[0] for row in records] if records else []
 
 # --- MAIN MENU ---
 def main_menu(user_id):
@@ -97,8 +108,8 @@ def main_menu(user_id):
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.chat.id
-    cursor.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
-    is_new = cursor.fetchone() is None
+    res = run_query("SELECT user_id FROM users WHERE user_id=%s", (user_id,), fetch='one')
+    is_new = res is None
     get_balance(user_id) 
     
     if is_new and user_id != ADMIN_ID:
@@ -150,7 +161,6 @@ def handle_all_messages(message):
             admin_msg = f"🔔 <b>NEW GMAIL TASK SUBMISSION</b>\n\n👤 <b>User ID:</b> <code>{user_id}</code>\n\nPlease check screenshot."
             bot.send_photo(ADMIN_ID, file_id, caption=admin_msg, parse_mode="HTML", reply_markup=markup)
             
-            # Updated confirmation message
             bot.send_message(user_id, "✅ <b>Apka Screenshot Admin ko bhaj diya gaya hai. Pls Wait For Checking in 24Hrs. Be Patient.</b>", parse_mode="HTML", reply_markup=main_menu(user_id))
             del user_states[user_id]
             return
@@ -168,7 +178,7 @@ def handle_all_messages(message):
                    "💰 *Reward:* ₹15\n\n"
                    "⚠️ *Instructions & Rules:*\n"
                    "Rule - Create a new Gmail account.\n"
-                   "Password must be - `malam222`\n\n"
+                   "Password must be - `ethicbro999`\n\n"
                    "👉 *Complete the task and click the button below!*")
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton("✅ Click Here When Done", callback_data="task_done"))
@@ -177,12 +187,12 @@ def handle_all_messages(message):
 
         elif text == "📧 Old Gmail Task":
             if get_setting('old_gmail_task') == 'OFF' and user_id != ADMIN_ID:
-                bot.send_message(user_id, "❌ Yeh option filhal Admin dwara **OFF** kar diya gaya hai Aap Gmail Task Option Sa Fresh Gmail Kar sakte.")
+                bot.send_message(user_id, "❌ Yeh option filhal Admin dwara **OFF** kar diya gaya hai. Kripya baad mein try karein.")
                 return
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
             msg = ("📧 *OLD GMAIL TASK*\n\n"
-                   "👉 Kripya apna valid **Old Gmail Account** yahan bhejein Yaad Rakhe Ki Gmail Ma Code Verification Nhi Jana Chayea Warna REJECT Ho Jayega Sahi Mail De (jaise: `example@gmail.com`):")
+                   "👉 Kripya apna valid **Old Gmail Account** yahan bhejein (jaise: `example@gmail.com`):")
             bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=markup)
             user_states[user_id] = {'state': 'old_gmail_email'}
 
@@ -195,8 +205,7 @@ def handle_all_messages(message):
                    f"💵 *Balance:* ₹{balance_inr:.2f} / ${balance_usd:.2f} USD\n"
                    f"━━━━━━━━━━━━━━━━━━\n\n"
                    f"📊 *Recent Transactions:*\n")
-            cursor.execute("SELECT type, amount, detail, date FROM history WHERE user_id=? ORDER BY id DESC LIMIT 5", (user_id,))
-            records = cursor.fetchall()
+            records = run_query("SELECT type, amount, detail, date FROM history WHERE user_id=%s ORDER BY id DESC LIMIT 5", (user_id,), fetch='all')
             if not records:
                 msg += "📝 _No history found yet._"
             for r in records:
@@ -252,8 +261,7 @@ def handle_all_messages(message):
                     user_states[user_id] = {'state': 'withdraw_amount', 'method': text}
 
         elif text == "📜 Withdraw History":
-            cursor.execute("SELECT detail, amount, date FROM history WHERE user_id=? AND type='DEBIT' ORDER BY id DESC LIMIT 10", (user_id,))
-            records = cursor.fetchall()
+            records = run_query("SELECT detail, amount, date FROM history WHERE user_id=%s AND type='DEBIT' ORDER BY id DESC LIMIT 10", (user_id,), fetch='all')
             if not records:
                 bot.send_message(user_id, "📝 _Aapki koi withdrawal history nahi hai._", parse_mode="Markdown", reply_markup=main_menu(user_id))
             else:
@@ -375,10 +383,9 @@ def handle_all_messages(message):
                 display_amount = state_data['display_amount']
                 
                 deduct_balance(user_id, amount_inr, f"Pending {method} Withdraw ({display_amount})")
-                cursor.execute("INSERT INTO pending_withdraws (user_id, method, address, amount) VALUES (?, ?, ?, ?)", 
-                               (user_id, method, address, display_amount))
-                pending_id = cursor.lastrowid
-                conn.commit()
+                
+                pending_id = run_query("INSERT INTO pending_withdraws (user_id, method, address, amount) VALUES (%s, %s, %s, %s) RETURNING id", 
+                                       (user_id, method, address, display_amount), fetch='id', commit=True)
                 
                 bot.send_message(user_id, "✅ *Request Submitted!*\nAapka withdrawal request Admin ko bhej diya gaya hai.", parse_mode="Markdown", reply_markup=main_menu(user_id))
                 
@@ -565,8 +572,7 @@ def callback_query(call):
 
     elif data.startswith("apprw_"): 
         pending_id = int(data.split("_")[1])
-        cursor.execute("SELECT user_id, amount, method FROM pending_withdraws WHERE id=?", (pending_id,))
-        req = cursor.fetchone()
+        req = run_query("SELECT user_id, amount, method FROM pending_withdraws WHERE id=%s", (pending_id,), fetch='one')
         if req:
             target_user, display_amount, method = req
             curr_symbol = "₹" if method == "🏦 UPI" else "$"
@@ -577,15 +583,13 @@ def callback_query(call):
             try:
                 bot.edit_message_text(f"✅ Withdrawal Approved for <code>{target_user}</code> (Done)", call.message.chat.id, call.message.message_id, parse_mode="HTML")
             except: pass
-            cursor.execute("DELETE FROM pending_withdraws WHERE id=?", (pending_id,))
-            conn.commit()
+            run_query("DELETE FROM pending_withdraws WHERE id=%s", (pending_id,), commit=True)
         else:
             bot.answer_callback_query(call.id, "⚠️ Already processed or invalid request!", show_alert=True)
 
     elif data.startswith("rejcc_"): 
         pending_id = int(data.split("_")[1])
-        cursor.execute("SELECT user_id, amount, method FROM pending_withdraws WHERE id=?", (pending_id,))
-        req = cursor.fetchone()
+        req = run_query("SELECT user_id, amount, method FROM pending_withdraws WHERE id=%s", (pending_id,), fetch='one')
         if req:
             target_user, display_amount, method = req
             refund_inr = display_amount if method == "🏦 UPI" else display_amount * USDT_TO_INR_RATE
@@ -598,11 +602,10 @@ def callback_query(call):
             try:
                 bot.edit_message_text(f"❌ Withdrawal Rejected for <code>{target_user}</code> (Refunded)", call.message.chat.id, call.message.message_id, parse_mode="HTML")
             except: pass
-            cursor.execute("DELETE FROM pending_withdraws WHERE id=?", (pending_id,))
-            conn.commit()
+            run_query("DELETE FROM pending_withdraws WHERE id=%s", (pending_id,), commit=True)
         else:
             bot.answer_callback_query(call.id, "⚠️ Already processed or invalid request!", show_alert=True)
 
 # --- START BOT ---
-print("Bot with updated submission message & admin username is running smoothly...")
+print("Bot with Permanent Database (Neon.tech) is running safely...")
 bot.polling(none_stop=True)
