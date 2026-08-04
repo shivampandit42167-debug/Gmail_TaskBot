@@ -177,7 +177,7 @@ def handle_all_messages(message):
 
         elif text == "📧 Old Gmail Task":
             if get_setting('old_gmail_task') == 'OFF' and user_id != ADMIN_ID:
-                bot.send_message(user_id, "❌ Yeh option filhal Admin dwara **OFF** kar diya gaya hai. Kripya baad mein try karein.")
+                bot.send_message(user_id, "❌ Yeh option filhal Admin dwara **OFF** kar diya gaya hai Aap Gmail Task Option Sa Fresh Gmail Kar sakte.")
                 return
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
