@@ -3,14 +3,15 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMar
 import psycopg2
 import datetime
 import time
+import os
 
 # --- CONFIGURATION ---
-TOKEN = '8683212510:AAEdE8kq5-5GuKerfPa_Mzaxovgb-J5VU4w'
+TOKEN = '8717817143:AAEyVo1Brv7b9T-b8NE98E6iQflpR2HtWPI'
 OWNER_ID = 8894779077  # Main Super Admin ID
 ADMIN_USERNAME = 'Raka_01'  
 
 # 👉 Tumhara Neon.tech PostgreSQL Database URL 👈
-DATABASE_URL = 'postgresql://neondb_owner:npg_TFXNmVEARt72@ep-twilight-sunset-axd07o2j-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require' 
+DATABASE_URL = 'postgresql://neondb_owner:npg_vseV2Cxlwqi9@ep-mute-frost-axanqffq-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require' 
 
 # Conversion Rate: 1 USDT = ₹94
 USDT_TO_INR_RATE = 94.0  
@@ -105,6 +106,17 @@ def get_all_users():
     records = run_query("SELECT user_id FROM users", fetch='all')
     return [row[0] for row in records] if records else []
 
+def admin_markup(user_id):
+    markup = InlineKeyboardMarkup()
+    stat = get_setting('bot_status')
+    markup.row(InlineKeyboardButton(f"🤖 Bot Status: {stat}", callback_data="admin_bot_toggle"), InlineKeyboardButton("🟢/🔴 Options", callback_data="admin_toggles"))
+    markup.row(InlineKeyboardButton("💰 Set Task Rewards", callback_data="admin_reward_menu"), InlineKeyboardButton("🗺️ Manage Map Tasks", callback_data="admin_map_menu"))
+    if user_id == OWNER_ID: markup.row(InlineKeyboardButton("👥 Manage Admins", callback_data="admin_manage"))
+    markup.row(InlineKeyboardButton("📊 Total Users", callback_data="admin_total_users"), InlineKeyboardButton("⚙️ Set Min Withdraw", callback_data="admin_set_min"))
+    markup.row(InlineKeyboardButton("🔑 Gmail Pass", callback_data="admin_set_pass"), InlineKeyboardButton("📜 Approved Withdrawals", callback_data="admin_approved_list"))
+    markup.row(InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"), InlineKeyboardButton("💸 Add Balance", callback_data="admin_addbal"))
+    return markup
+
 # --- MAIN MENU ---
 def main_menu(user_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -125,7 +137,7 @@ def send_welcome(message):
     res = run_query("SELECT user_id FROM users WHERE user_id=%s", (user_id,), fetch='one')
     get_balance(user_id) 
     if res is None and not is_admin(user_id):
-        try: bot.send_message(OWNER_ID, f"🚀 <b>New User Started Bot!</b>\n\n👤 <b>User ID:</b> <code>{user_id}</code>", parse_mode="HTML")
+        try: bot.send_message(OWNER_ID, f"🚀 <b>New User Started Bot!</b>\n\n👤 <b>User ID:</b> <code>{user_id}</code>\n👤 <b>Name:</b> {message.from_user.first_name}", parse_mode="HTML")
         except: pass
 
     msg = f"✨ <b>WELCOME TO OUR BOT!</b> ✨\n\nHello {message.from_user.first_name}, yahan aap simple tasks complete karke real cash earn kar sakte hain! 💸\n\n👇 <b>Niche diye gaye buttons se apna task shuru karein:</b>"
@@ -177,9 +189,19 @@ def handle_all_messages(message):
         if state == 'map_task_screenshot':
             if message.content_type == 'photo':
                 task_id = user_states[user_id]['task_id']
+                
+                # Fetch Link & Text to display to Admin
+                task_data = run_query("SELECT link, review_text FROM map_tasks WHERE id=%s", (task_id,), fetch='one')
+                t_link, t_txt = task_data if task_data else ("Unknown", "Unknown")
+
                 markup = InlineKeyboardMarkup()
                 markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"mappr_{user_id}_{task_id}"), InlineKeyboardButton("❌ Reject", callback_data=f"mrej_{user_id}_{task_id}"))
-                bot.send_photo(OWNER_ID, message.photo[-1].file_id, caption=f"🗺️ <b>NEW MAP REVIEW SUBMITTED</b>\n👤 <code>{user_id}</code>\n🔖 Task ID: {task_id}", parse_mode="HTML", reply_markup=markup)
+                
+                admin_msg = (f"🗺️ <b>NEW MAP REVIEW SUBMITTED</b>\n👤 <code>{user_id}</code>\n🔖 Task ID: {task_id}\n\n"
+                             f"🔗 <b>Assigned Link:</b>\n{t_link}\n\n"
+                             f"💬 <b>Assigned Text:</b>\n<code>{t_txt}</code>")
+                
+                bot.send_photo(OWNER_ID, message.photo[-1].file_id, caption=admin_msg, parse_mode="HTML", reply_markup=markup)
                 bot.send_message(user_id, "✅ <b>Map Review Admin ko check ke liye bhej diya gaya hai!</b>", parse_mode="HTML", reply_markup=main_menu(user_id))
                 del user_states[user_id]
                 return
@@ -220,7 +242,13 @@ def handle_all_messages(message):
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton("✅ I Agree (Get Task)", callback_data="map_agree"))
             markup.add(InlineKeyboardButton("🔙 Back to Main", callback_data="back_to_main"))
-            bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=markup)
+            
+            # Send Rule Text With Rule Image
+            if os.path.exists("31928.jpg"):
+                with open("31928.jpg", "rb") as photo:
+                    bot.send_photo(user_id, photo, caption=msg, parse_mode="Markdown", reply_markup=markup)
+            else:
+                bot.send_message(user_id, msg + "\n\n*(No rule image found)*", parse_mode="Markdown", reply_markup=markup)
 
         elif text == "💰 Wallet":
             balance_inr = get_balance(user_id)
@@ -268,14 +296,7 @@ def handle_all_messages(message):
                 bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=main_menu(user_id))
 
         elif text == "⚙️ Admin Panel" and is_admin(user_id):
-            markup = InlineKeyboardMarkup()
-            markup.row(InlineKeyboardButton("🤖 Bot Toggle", callback_data="admin_bot_toggle"), InlineKeyboardButton("🟢/🔴 Options", callback_data="admin_toggles"))
-            markup.row(InlineKeyboardButton("💰 Set Task Rewards", callback_data="admin_reward_menu"), InlineKeyboardButton("🗺️ Manage Map Tasks", callback_data="admin_map_menu"))
-            if user_id == OWNER_ID: markup.row(InlineKeyboardButton("👥 Manage Admins", callback_data="admin_manage"))
-            markup.row(InlineKeyboardButton("📊 Total Users", callback_data="admin_total_users"), InlineKeyboardButton("⚙️ Set Min Withdraw", callback_data="admin_set_min"))
-            markup.row(InlineKeyboardButton("🔑 Gmail Pass", callback_data="admin_set_pass"), InlineKeyboardButton("📜 Approved Withdrawals", callback_data="admin_approved_list"))
-            markup.row(InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"), InlineKeyboardButton("💸 Add Balance", callback_data="admin_addbal"))
-            bot.send_message(user_id, "🛠️ *ADMIN PANEL*", parse_mode="Markdown", reply_markup=markup)
+            bot.send_message(user_id, "🛠️ *ADMIN PANEL*", parse_mode="Markdown", reply_markup=admin_markup(user_id))
 
         # --- DYNAMIC STATES FOR ADMIN & WITHDRAWALS ---
         elif user_id in user_states:
@@ -304,13 +325,13 @@ def handle_all_messages(message):
                         link, rev_txt = line.split('|', 1)
                         run_query("INSERT INTO map_tasks (link, review_text) VALUES (%s, %s)", (link.strip(), rev_txt.strip()), commit=True)
                         added += 1
-                bot.send_message(user_id, f"✅ Bulk Import Done! Added {added} tasks.", reply_markup=main_menu(user_id))
+                bot.send_message(user_id, f"✅ Bulk Import Done! Added {added} tasks in Stock.", reply_markup=main_menu(user_id))
                 del user_states[user_id]
 
             elif st.startswith('admin_set_reward_') and is_admin(user_id):
                 try:
                     val = float(text)
-                    key = st.replace('admin_set_', '') # e.g. reward_gmail
+                    key = st.replace('admin_set_', '') 
                     update_setting(key, val)
                     bot.send_message(user_id, f"✅ Reward updated to ₹{val}", reply_markup=main_menu(user_id))
                     del user_states[user_id]
@@ -414,7 +435,7 @@ def callback_query(call):
         except: pass
         bot.send_message(user_id, "🏠 *Main Menu*", parse_mode="Markdown", reply_markup=main_menu(user_id))
 
-    # 👉 MAP REVIEW SYSTEM logic
+    # 👉 MAP REVIEW SYSTEM logic (ATOMIC LOCK APPLIED HERE)
     elif data == "map_agree":
         if get_setting('map_review_task') == 'OFF':
             bot.answer_callback_query(call.id, "Map Task OFF hai!", show_alert=True); return
@@ -429,8 +450,12 @@ def callback_query(call):
             bot.send_message(user_id, msg, parse_mode="Markdown", reply_markup=markup)
             return
 
-        # Fetch new task specifically assigning it
-        task = run_query("UPDATE map_tasks SET status='PENDING', assigned_to=%s WHERE id = (SELECT id FROM map_tasks WHERE status='AVAILABLE' LIMIT 1) RETURNING id, link, review_text", (user_id,), fetch='one', commit=True)
+        # Atomic Query to fetch a unique task using FOR UPDATE SKIP LOCKED
+        task = run_query('''
+            UPDATE map_tasks SET status='PENDING', assigned_to=%s 
+            WHERE id = (SELECT id FROM map_tasks WHERE status='AVAILABLE' LIMIT 1 FOR UPDATE SKIP LOCKED) 
+            RETURNING id, link, review_text
+        ''', (user_id,), fetch='one', commit=True)
         
         if not task:
             bot.answer_callback_query(call.id, "🚫 No Review Task Available Right Now!", show_alert=True)
@@ -449,6 +474,7 @@ def callback_query(call):
 
     elif data.startswith("mapcancel_"):
         t_id = data.split("_")[1]
+        # Return to stock completely safe
         run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
         bot.edit_message_text("❌ *Task Cancelled.* Wapas stock me chala gaya.", user_id, call.message.message_id, parse_mode="Markdown")
 
@@ -466,7 +492,7 @@ def callback_query(call):
     elif data.startswith("mrej_") and is_admin(user_id):
         tgt = int(data.split("_")[1])
         t_id = int(data.split("_")[2])
-        # Reject means goes back to stock!
+        # Reject means goes back to stock safely!
         run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
         try: bot.send_message(tgt, f"❌ Map Review Rejected.")
         except: pass
@@ -527,22 +553,17 @@ def callback_query(call):
         key = data.replace("toggle_", "")
         current = get_setting(key)
         update_setting(key, "OFF" if current == "ON" else "ON")
-        # Refresh logic manually (lazy refresh)
         bot.answer_callback_query(call.id, f"Toggled {key}!", show_alert=True)
 
     elif data == "admin_bot_toggle" and is_admin(user_id):
-        update_setting('bot_status', "OFF" if get_setting('bot_status') == "ON" else "ON")
-        bot.answer_callback_query(call.id, "Bot Status Changed!", show_alert=True)
+        current = get_setting('bot_status')
+        new_stat = "OFF" if current == "ON" else "ON"
+        update_setting('bot_status', new_stat)
+        bot.answer_callback_query(call.id, f"Bot Status Changed to {new_stat}!", show_alert=True)
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=admin_markup(user_id))
 
     elif data == "admin_back" and is_admin(user_id):
-        markup = InlineKeyboardMarkup()
-        markup.row(InlineKeyboardButton("🤖 Bot Toggle", callback_data="admin_bot_toggle"), InlineKeyboardButton("🟢/🔴 Options", callback_data="admin_toggles"))
-        markup.row(InlineKeyboardButton("💰 Set Task Rewards", callback_data="admin_reward_menu"), InlineKeyboardButton("🗺️ Manage Map Tasks", callback_data="admin_map_menu"))
-        if user_id == OWNER_ID: markup.row(InlineKeyboardButton("👥 Manage Admins", callback_data="admin_manage"))
-        markup.row(InlineKeyboardButton("📊 Total Users", callback_data="admin_total_users"), InlineKeyboardButton("⚙️ Set Min Withdraw", callback_data="admin_set_min"))
-        markup.row(InlineKeyboardButton("🔑 Gmail Pass", callback_data="admin_set_pass"), InlineKeyboardButton("📜 Approved Withdrawals", callback_data="admin_approved_list"))
-        markup.row(InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"), InlineKeyboardButton("💸 Add Balance", callback_data="admin_addbal"))
-        bot.edit_message_text("🛠️ *ADMIN PANEL*", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
+        bot.edit_message_text("🛠️ *ADMIN PANEL*", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=admin_markup(user_id))
 
     elif data == "admin_set_min" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
@@ -617,5 +638,5 @@ def callback_query(call):
             run_query("DELETE FROM pending_withdraws WHERE id=%s", (pid,), commit=True)
 
 # --- START BOT ---
-print("Bot running with New Token & DB URL...")
+print("Bot Status Indication & Map Verification Systems Are LIVE!")
 bot.polling(none_stop=True)
