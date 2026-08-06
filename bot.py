@@ -656,6 +656,38 @@ def callback_query(call):
     elif data == "admin_total_users" and is_admin(user_id):
         bot.answer_callback_query(call.id, f"Global Population: {len(get_all_users())}", show_alert=True)
     
+    elif data == "admin_approved_list" and is_admin(user_id):
+        records = run_query("SELECT user_id, method, address, amount, date FROM approved_withdraws ORDER BY id DESC LIMIT 15", fetch='all')
+        if not records:
+            bot.answer_callback_query(call.id, "Koi approved withdraw history nahi hai!", show_alert=True)
+        else:
+            msg = "📜 <b>APPROVED WITHDRAWALS HISTORY:</b>\n\n"
+            for r in records:
+                curr_symbol = "₹" if r[1] == "🏦 UPI" else "$"
+                safe_addr = str(r[2]).replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;")
+                msg += f"👤 <code>{r[0]}</code> | {r[1]} | 💰 {curr_symbol}{r[3]} | 📌 <code>{safe_addr}</code>\n📅 {r[4]}\n\n"
+            
+            if len(msg) > 4000:
+                msg = msg[:4000] + "\n\n⚠️ (Limit reached, Showing latest)"
+                
+            try:
+                bot.send_message(user_id, msg, parse_mode="HTML")
+                bot.answer_callback_query(call.id)
+            except Exception as e:
+                bot.answer_callback_query(call.id, "⚠️ History dikhane me error aaya.", show_alert=True)
+
+    elif data == "admin_broadcast" and is_admin(user_id):
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back"))
+        bot.send_message(user_id, "📢 <b>BROADCAST MODE</b>\n\nJo message sabko bhejna hai, wo bhejein (Text, Photo, Video etc):", parse_mode="HTML", reply_markup=markup)
+        user_states[user_id] = {'state': 'admin_wait_broadcast'}
+
+    elif data == "admin_addbal" and is_admin(user_id):
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back"))
+        bot.send_message(user_id, "💸 <b>ADD BALANCE MODE</b>\n\n👉 User ka <b>Telegram ID</b> bhejein:", parse_mode="HTML", reply_markup=markup)
+        user_states[user_id] = {'state': 'admin_wait_uid'}
+
     # Approvals with Dynamic Amounts
     elif data.startswith("oldappr_") and is_admin(user_id):
         tgt = int(data.split("_")[1])
@@ -730,5 +762,5 @@ def callback_query(call):
             bot.answer_callback_query(call.id, "⚠️ Identity mismatched or request invalid.", show_alert=True)
 
 # --- START BOT ---
-print("System Online: Advanced Manager & Corporate Theme Deployed.")
+print("System Online: All Callbacks Fixed.")
 bot.polling(none_stop=True)
