@@ -34,7 +34,6 @@ def run_query(query, params=(), fetch=None, commit=False):
         elif fetch == 'id':
             return cursor.fetchone()[0]
     except Exception as e:
-        print(f"Database Error: {e}")
         return None
     finally:
         cursor.close()
@@ -43,6 +42,8 @@ def run_query(query, params=(), fetch=None, commit=False):
 # --- DATABASE SETUP (POSTGRESQL) ---
 def init_db():
     run_query('''CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, balance FLOAT DEFAULT 0)''', commit=True)
+    run_query('''ALTER TABLE users ADD COLUMN username TEXT DEFAULT 'Unknown' ''', commit=True)
+    
     run_query('''CREATE TABLE IF NOT EXISTS history (id SERIAL PRIMARY KEY, user_id BIGINT, type TEXT, amount FLOAT, detail TEXT, date TEXT)''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS pending_withdraws (id SERIAL PRIMARY KEY, user_id BIGINT, method TEXT, address TEXT, amount FLOAT)''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS approved_withdraws (id SERIAL PRIMARY KEY, user_id BIGINT, method TEXT, address TEXT, amount FLOAT, date TEXT)''', commit=True)
@@ -112,8 +113,11 @@ def admin_markup(user_id):
     markup.row(InlineKeyboardButton(f"🤖 Bot Status: {stat}", callback_data="admin_bot_toggle"), InlineKeyboardButton("🟢/🔴 Options", callback_data="admin_toggles"))
     markup.row(InlineKeyboardButton("💰 Set Task Rewards", callback_data="admin_reward_menu"), InlineKeyboardButton("🗺️ Manage Map Tasks", callback_data="admin_map_menu"))
     if user_id == OWNER_ID: markup.row(InlineKeyboardButton("👥 Manage Admins", callback_data="admin_manage"))
-    markup.row(InlineKeyboardButton("📊 Total Users", callback_data="admin_total_users"), InlineKeyboardButton("⚙️ Set Min Withdraw", callback_data="admin_set_min"))
-    markup.row(InlineKeyboardButton("🔑 Gmail Pass", callback_data="admin_set_pass"), InlineKeyboardButton("📜 Approved Withdrawals", callback_data="admin_approved_list"))
+    
+    markup.row(InlineKeyboardButton("📊 Total Users", callback_data="admin_total_users"), InlineKeyboardButton("👥 All User Balances", callback_data="admin_user_balances"))
+    
+    markup.row(InlineKeyboardButton("⚙️ Set Min Withdraw", callback_data="admin_set_min"), InlineKeyboardButton("🔑 Gmail Pass", callback_data="admin_set_pass"))
+    markup.row(InlineKeyboardButton("📜 Approved Withdrawals", callback_data="admin_approved_list"))
     markup.row(InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"), InlineKeyboardButton("💸 Add Balance", callback_data="admin_addbal"))
     return markup
 
@@ -131,13 +135,19 @@ def main_menu(user_id):
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.chat.id
+    username = message.from_user.username
+    uname_str = f"@{username}" if username else str(message.from_user.first_name)
+    
     if get_setting('bot_status') == 'OFF' and not is_admin(user_id):
         bot.send_message(user_id, "🛠️ <b>System Under Maintenance</b>\nWe are currently upgrading our systems. Please check back later.", parse_mode="HTML")
         return
     res = run_query("SELECT user_id FROM users WHERE user_id=%s", (user_id,), fetch='one')
     get_balance(user_id) 
+    
+    run_query("UPDATE users SET username=%s WHERE user_id=%s", (uname_str, user_id), commit=True)
+    
     if res is None and not is_admin(user_id):
-        try: bot.send_message(OWNER_ID, f"🚀 <b>New User Registration</b>\n\n👤 <b>User ID:</b> <code>{user_id}</code>\n👤 <b>Name:</b> {message.from_user.first_name}", parse_mode="HTML")
+        try: bot.send_message(OWNER_ID, f"🚀 <b>New User Registration</b>\n\n👤 <b>User ID:</b> <code>{user_id}</code>\n👤 <b>Name:</b> {message.from_user.first_name}\n🔗 <b>Username:</b> {uname_str}", parse_mode="HTML")
         except: pass
 
     msg = (f"✨ <b>𝗪𝗘𝗟𝗖𝗢𝗠𝗘 𝗧𝗢 𝗣𝗥𝗘𝗠𝗜𝗨𝗠 𝗘𝗔𝗥𝗡𝗜𝗡𝗚𝗦</b> ✨\n\n"
@@ -151,6 +161,10 @@ def send_welcome(message):
 def handle_all_messages(message):
     user_id = message.chat.id
     text = message.text if message.text else message.caption
+
+    username = message.from_user.username
+    uname_str = f"@{username}" if username else str(message.from_user.first_name)
+    run_query("UPDATE users SET username=%s WHERE user_id=%s", (uname_str, user_id), commit=True)
 
     if get_setting('bot_status') == 'OFF' and not is_admin(user_id):
         bot.send_message(user_id, "🛠️ <b>System is currently under maintenance!</b>", parse_mode="HTML")
@@ -174,7 +188,6 @@ def handle_all_messages(message):
     if user_id in user_states:
         state = user_states[user_id].get('state')
         
-        # Gmail Task SS
         if state == 'gmail_task_screenshot':
             if message.content_type == 'photo':
                 gmail_name = user_states[user_id]['gmail_name']
@@ -188,7 +201,6 @@ def handle_all_messages(message):
                 bot.send_message(user_id, "❌ Invalid format. Please upload a clear <b>Screenshot (Photo)</b>.")
                 return
         
-        # Map Task SS
         if state == 'map_task_screenshot':
             if message.content_type == 'photo':
                 task_id = user_states[user_id]['task_id']
@@ -316,7 +328,6 @@ def handle_all_messages(message):
             state_data = user_states[user_id]
             st = state_data['state']
 
-            # 🛠️ MAP STOCK MANAGER STATES (Edit/Delete specific task)
             if st == 'admin_map_manage_id' and is_admin(user_id):
                 try:
                     tid = int(text.strip())
@@ -477,12 +488,11 @@ def callback_query(call):
         except: pass
         bot.send_message(user_id, "🏠 <b>Main Menu</b>", parse_mode="HTML", reply_markup=main_menu(user_id))
 
-    # 👉 MAP REVIEW SYSTEM logic (ATOMIC LOCK APPLIED HERE)
+    # 👉 MAP REVIEW SYSTEM logic
     elif data == "map_agree":
         if get_setting('map_review_task') == 'OFF':
             bot.answer_callback_query(call.id, "Map Task is currently disabled!", show_alert=True); return
         
-        # Check if already pending
         chk = run_query("SELECT id, link, review_text FROM map_tasks WHERE assigned_to=%s AND status='PENDING'", (user_id,), fetch='one')
         if chk:
             t_id, t_link, t_txt = chk
@@ -492,7 +502,6 @@ def callback_query(call):
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
             return
 
-        # Atomic Query to fetch a unique task using FOR UPDATE SKIP LOCKED
         task = run_query('''
             UPDATE map_tasks SET status='PENDING', assigned_to=%s 
             WHERE id = (SELECT id FROM map_tasks WHERE status='AVAILABLE' LIMIT 1 FOR UPDATE SKIP LOCKED) 
@@ -516,7 +525,6 @@ def callback_query(call):
 
     elif data.startswith("mapcancel_"):
         t_id = data.split("_")[1]
-        # Return to stock completely safe
         run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
         bot.edit_message_text("❌ <b>Operation Aborted.</b> The task has been successfully re-queued to the grid.", user_id, call.message.message_id, parse_mode="HTML")
 
@@ -565,7 +573,6 @@ def callback_query(call):
     elif data.startswith("mrej_") and is_admin(user_id):
         tgt = int(data.split("_")[1])
         t_id = int(data.split("_")[2])
-        # Reject means goes back to stock safely!
         run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
         try: bot.send_message(tgt, f"❌ <b>Validation Failed.</b> Your review submission did not meet the necessary criteria.", parse_mode="HTML")
         except: pass
@@ -655,6 +662,34 @@ def callback_query(call):
 
     elif data == "admin_total_users" and is_admin(user_id):
         bot.answer_callback_query(call.id, f"Global Population: {len(get_all_users())}", show_alert=True)
+        
+    # 👉 CHUNKING MECHANISM FOR ALL USER BALANCES (NO LIMIT, NO CRASH)
+    elif data == "admin_user_balances" and is_admin(user_id):
+        records = run_query("SELECT user_id, username, balance FROM users ORDER BY balance DESC", fetch='all')
+        if not records:
+            bot.answer_callback_query(call.id, "No users registered yet!", show_alert=True)
+            return
+        
+        bot.answer_callback_query(call.id, "Fetching all users data...")
+        
+        header = f"👥 <b>ALL USER BALANCES (Total: {len(records)})</b>\n━━━━━━━━━━━━━━━━━━━\n"
+        current_msg = header
+        
+        for r in records:
+            uname = r[1] if r[1] else "Unknown"
+            line = f"👤 {uname} | <code>{r[0]}</code> | 💰 ₹{r[2]:.2f}\n"
+            
+            # Message split logic if exceeding Telegram max char limit (~4000)
+            if len(current_msg) + len(line) > 3900:
+                bot.send_message(call.message.chat.id, current_msg, parse_mode="HTML")
+                current_msg = "👥 <b>ALL USER BALANCES (Contd.)</b>\n━━━━━━━━━━━━━━━━━━━\n" + line
+            else:
+                current_msg += line
+                
+        if current_msg:
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back"))
+            bot.send_message(call.message.chat.id, current_msg, parse_mode="HTML", reply_markup=markup)
     
     elif data == "admin_approved_list" and is_admin(user_id):
         records = run_query("SELECT user_id, method, address, amount, date FROM approved_withdraws ORDER BY id DESC LIMIT 15", fetch='all')
@@ -762,5 +797,5 @@ def callback_query(call):
             bot.answer_callback_query(call.id, "⚠️ Identity mismatched or request invalid.", show_alert=True)
 
 # --- START BOT ---
-print("System Online: All Callbacks Fixed.")
+print("System Online: All Users Balance Feature Activated Safely.")
 bot.polling(none_stop=True)
