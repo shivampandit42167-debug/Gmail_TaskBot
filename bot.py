@@ -232,8 +232,8 @@ def handle_all_messages(message):
             msg = (f"📧 <b>GMAIL CREATION TASK</b>\n"
                    f"💰 <b>Reward:</b> ₹{reward}\n\n"
                    f"⚠️ <b>Instructions:</b>\n"
-                   f"• Create a brand new Gmail account.\n"
-                   f"• Use the exact password provided below:\n"
+                   f"• Create a brand new Gmail account Age 18+ Select ok.\n"
+                   f"• Use this Anyway Invalid Must Use My password provided below:\n"
                    f"🔐 <code>{current_pass}</code>\n\n"
                    f"👉 <i>Click the button below once completed!</i>")
             markup = InlineKeyboardMarkup()
