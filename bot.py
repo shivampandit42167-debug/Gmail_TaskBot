@@ -160,7 +160,7 @@ def auto_broadcast_stock(count, task_type):
 def admin_markup(user_id):
     markup = InlineKeyboardMarkup()
     stat = get_setting('bot_status')
-    markup.row(InlineKeyboardButton(f"🤖 Bot Power: {stat}", callback_data="admin_bot_toggle"), InlineKeyboardButton("👁️ Visibility Toggles", callback_data="admin_toggles"))
+    markup.row(InlineKeyboardButton(f"🤖 Bot Status: {stat}", callback_data="admin_bot_toggle"), InlineKeyboardButton("👁️ Visibility Toggles", callback_data="admin_toggles"))
     markup.row(InlineKeyboardButton("📧 Manage New Gmails", callback_data="admin_new_gmail_menu"), InlineKeyboardButton("🗺️ Manage Map Tasks", callback_data="admin_map_menu"))
     markup.row(InlineKeyboardButton("💰 Set Task Rewards", callback_data="admin_reward_menu"), InlineKeyboardButton("⚙️ Auto-Alert Setup", callback_data="admin_set_auto_alert"))
     if user_id == OWNER_ID: markup.row(InlineKeyboardButton("👥 Manage Admins", callback_data="admin_manage"))
@@ -196,7 +196,7 @@ def send_welcome(message):
     uname_str = f"@{username}" if username else str(message.from_user.first_name)
     
     if get_setting('bot_status') == 'OFF' and not is_admin(user_id):
-        bot.send_message(user_id, "Bot Option Is Now Closed By Admin")
+        bot.send_message(user_id, "🛠️ <b>Bot Is Under Maintenance Fixing Bug And Updating</b>\nPlease check back later.", parse_mode="HTML")
         return
         
     res = run_query("SELECT user_id FROM users WHERE user_id=%s", (user_id,), fetch='one')
@@ -223,8 +223,9 @@ def handle_all_messages(message):
     uname_str = f"@{username}" if username else str(message.from_user.first_name)
     run_query("UPDATE users SET username=%s WHERE user_id=%s", (uname_str, user_id), commit=True)
 
+    # 🔴 Global Bot Maintenance Check
     if get_setting('bot_status') == 'OFF' and not is_admin(user_id):
-        bot.send_message(user_id, "Bot Option Is Now Closed By Admin")
+        bot.send_message(user_id, "🛠️ <b>Bot Is Under Maintenance Fixing Bug And Updating</b>\nPlease check back later.", parse_mode="HTML")
         return
 
     # ADMIN STATES
@@ -325,7 +326,9 @@ def handle_all_messages(message):
 
     if message.content_type == 'text':
         if text == "📧 Get New Gmail Task":
-            if get_setting('new_gmail_task') == 'OFF' and not is_admin(user_id): return
+            if get_setting('new_gmail_task') == 'OFF' and not is_admin(user_id): 
+                bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
+                return
             free_expired_gmail_tasks()
             
             msg = "📧 <b>SELECT GMAIL TASK TYPE</b>\n\nChoose how many tasks you want to process at once:"
@@ -336,7 +339,9 @@ def handle_all_messages(message):
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
         elif text == "📧 Create Gmail Task":
-            if get_setting('create_gmail_task') == 'OFF' and not is_admin(user_id): return
+            if get_setting('create_gmail_task') == 'OFF' and not is_admin(user_id): 
+                bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
+                return
             current_pass = get_setting('gmail_password')
             reward = get_setting('reward_gmail')
             msg = (f"📧 <b>GMAIL CREATION TASK</b>\n💰 <b>Reward:</b> ₹{reward}\n\n⚠️ <b>Instructions:</b>\n"
@@ -347,13 +352,18 @@ def handle_all_messages(message):
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
         elif text == "📧 Old Gmail Task":
-            if get_setting('old_gmail_task') == 'OFF' and not is_admin(user_id): return
-            markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Return to Main Menu", callback_data="back_to_main"))
+            if get_setting('old_gmail_task') == 'OFF' and not is_admin(user_id): 
+                bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
+                return
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("🔙 Return to Main Menu", callback_data="back_to_main"))
             bot.send_message(user_id, "📧 <b>OLD GMAIL SUBMISSION</b>\n\n👉 Please provide your valid <b>Old Gmail Address</b>:", parse_mode="HTML", reply_markup=markup)
             user_states[user_id] = {'state': 'old_gmail_email'}
 
         elif text == "🗺️ Map Review Task":
-            if get_setting('map_review_task') == 'OFF' and not is_admin(user_id): return
+            if get_setting('map_review_task') == 'OFF' and not is_admin(user_id): 
+                bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
+                return
             rules = get_setting('map_rules')
             reward = get_setting('reward_map')
             msg = (f"🗺️ <b>GOOGLE MAPS REVIEW</b>\n💰 <b>Reward:</b> ₹{reward}\n\n📜 <b>Guidelines & Procedure:</b>\n{rules}\n\n👇 <i>Accept the terms below to receive your unique assignment:</i>")
@@ -380,7 +390,9 @@ def handle_all_messages(message):
             bot.send_message(user_id, f"📞 <b>SUPPORT CENTER</b>\n\nFor any inquiries or assistance, please reach out to our administration:\n👨‍💻 <b>Support Desk:</b> @{ADMIN_USERNAME}", parse_mode="HTML", reply_markup=main_menu(user_id))
 
         elif text == "💸 Withdraw":
-            if get_setting('withdraw') == 'OFF' and not is_admin(user_id): return
+            if get_setting('withdraw') == 'OFF' and not is_admin(user_id): 
+                bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
+                return
             markup = ReplyKeyboardMarkup(resize_keyboard=True)
             markup.row(KeyboardButton("🏦 UPI"), KeyboardButton("🪙 USDT"))
             markup.row(KeyboardButton("📜 Withdraw History"), KeyboardButton("🔙 Back to Main"))
@@ -609,6 +621,10 @@ def callback_query(call):
 
     # 🔥 NEW GMAIL TASK WARNING PHOTO LOGIC
     elif data.startswith("ngm_type_"):
+        if get_setting('new_gmail_task') == 'OFF' and not is_admin(user_id):
+            bot.answer_callback_query(call.id, "Bot Option Is Now Closed By Admin", show_alert=True)
+            return
+            
         mode = data.split("_")[2]
         msg = ("⚠️ <b>INSTRUCTIONS & WARNING</b>\n\n"
                "<b>Submit Like This After Created Gmail 👇</b>\n\n"
@@ -697,8 +713,9 @@ def callback_query(call):
 
     # 👉 MAP REVIEW SYSTEM
     elif data == "map_agree":
-        if get_setting('map_review_task') == 'OFF':
-            bot.answer_callback_query(call.id, "Map Task is currently disabled!", show_alert=True); return
+        if get_setting('map_review_task') == 'OFF' and not is_admin(user_id):
+            bot.answer_callback_query(call.id, "Bot Option Is Now Closed By Admin", show_alert=True)
+            return
         
         chk = run_query("SELECT id, link, review_text FROM map_tasks WHERE assigned_to=%s AND status='PENDING'", (user_id,), fetch='one')
         if chk:
@@ -901,12 +918,10 @@ def callback_query(call):
     elif data == "admin_back" and is_admin(user_id):
         bot.edit_message_text("🛠️ <b>EXECUTIVE DASHBOARD</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=admin_markup(user_id))
 
-    # 🔥 SETTING WARNING PHOTO DYNAMICALLY
     elif data == "admin_set_warning_photo" and is_admin(user_id):
         user_states[user_id] = {'state': 'admin_wait_warning_photo'}
         bot.send_message(user_id, "🖼️ <b>WARNING PHOTO SETUP</b>\n\nKripya wo <b>Photo</b> bhejein jo users ko 'Get New Gmail Task' click karne par rules ke sath dikhegi.\n\n<i>Note: Sirf photo bhejein, text ki zaroorat nahi hai. Agar hatana ho toh koi bhi text bhej de.</i>", parse_mode="HTML")
 
-    # 🔥 AUTO ALERTS (SEPARATE FOR GMAIL & MAP)
     elif data == "admin_set_auto_alert" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("📧 Set Gmail Alert Photo/Text", callback_data="set_alert_gmail"))
