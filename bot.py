@@ -1,9 +1,12 @@
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 import psycopg2
+from psycopg2 import pool
 import datetime
 import time
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # --- CONFIGURATION ---
 TOKEN = '8683212510:AAEdE8kq5-5GuKerfPa_Mzaxovgb-J5VU4w'
@@ -18,38 +21,42 @@ USDT_TO_INR_RATE = 94.0
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
-# --- DATABASE AUTO-WAKEUP HELPER ---
-def run_query(query, params=(), fetch=None, commit=False, retries=3):
-    for i in range(retries):
-        try:
-            # 10 seconds ka timeout taaki Neon DB sleep se uth sake
-            conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            if commit:
-                conn.commit()
-            
-            res = None
-            if fetch == 'one':
-                res = cursor.fetchone()
-            elif fetch == 'all':
-                res = cursor.fetchall()
-            elif fetch == 'id':
-                row = cursor.fetchone()
-                res = row[0] if row else None
-                
-            cursor.close()
-            conn.close()
-            return res
-        except Exception as e:
-            print(f"⚠️ DB Warning (Attempt {i+1}/{retries}): Waiting for Neon.tech to wake up... Error: {e}")
-            time.sleep(3) # Wait before retry
-    print("❌ Critical: Database failed to connect after 3 attempts.")
-    return None
+# --- DATABASE CONNECTION POOL (Super Fast & Crash Proof) ---
+try:
+    db_pool = psycopg2.pool.ThreadedConnectionPool(1, 20, DATABASE_URL)
+    print("✅ Database Threaded Pool Created Successfully!")
+except Exception as e:
+    print(f"❌ Database Pool Error: {e}")
 
-# --- DATABASE SETUP ---
+def run_query(query, params=(), fetch=None, commit=False):
+    conn = None
+    try:
+        conn = db_pool.getconn()
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        if commit:
+            conn.commit()
+        
+        res = None
+        if fetch == 'one':
+            res = cursor.fetchone()
+        elif fetch == 'all':
+            res = cursor.fetchall()
+        elif fetch == 'id':
+            row = cursor.fetchone()
+            res = row[0] if row else None
+            
+        cursor.close()
+        db_pool.putconn(conn)
+        return res
+    except Exception as e:
+        print(f"⚠️ Query Error: {e}")
+        if conn:
+            db_pool.putconn(conn, close=True)
+        return None
+
+# --- DATABASE SETUP (POSTGRESQL) ---
 def init_db():
-    print("⏳ Initializing Database structure...")
     run_query('''CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, balance FLOAT DEFAULT 0)''', commit=True)
     run_query('''ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT DEFAULT 'Unknown' ''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS history (id SERIAL PRIMARY KEY, user_id BIGINT, type TEXT, amount FLOAT, detail TEXT, date TEXT)''', commit=True)
@@ -58,6 +65,7 @@ def init_db():
     run_query('''CREATE TABLE IF NOT EXISTS admins (user_id BIGINT PRIMARY KEY)''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS map_tasks (id SERIAL PRIMARY KEY, link TEXT, review_text TEXT, status TEXT DEFAULT 'AVAILABLE', assigned_to BIGINT)''', commit=True)
     
+    # NEW GMAIL TASK TABLE (With Auto-Timer Support)
     run_query('''CREATE TABLE IF NOT EXISTS new_gmail_tasks (
                  id SERIAL PRIMARY KEY, gmail TEXT, password TEXT, status TEXT DEFAULT 'AVAILABLE', 
                  assigned_to BIGINT, assigned_time TIMESTAMP)''', commit=True)
@@ -82,6 +90,8 @@ def init_db():
     }
     for k, v in default_settings.items():
         run_query("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", (k, v), commit=True)
+
+init_db()
 
 # --- HELPER FUNCTIONS ---
 def is_admin(user_id):
@@ -119,6 +129,7 @@ def get_all_users():
     return [row[0] for row in records] if records else []
 
 def free_expired_gmail_tasks():
+    # 15 minutes = 900 seconds
     query = """
         UPDATE new_gmail_tasks 
         SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL 
@@ -143,6 +154,7 @@ def admin_markup(user_id):
 def main_menu(user_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     
+    # 🔴 HIDE BUTTONS IF TASK IS OFF
     if get_setting('new_gmail_task') == 'ON':
         markup.row(KeyboardButton("📧 Get New Gmail Task"))
         
@@ -627,6 +639,7 @@ def callback_query(call):
         run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE id=%s", (tid,), commit=True)
         bot.edit_message_text("❌ <b>Task Cancelled.</b> Returned to stock.", user_id, call.message.message_id, parse_mode="HTML")
 
+    # New Gmail Admin Approvals
     elif data.startswith("ngm_appr"):
         amt = float(data.split("_")[1].replace("appr", "")) 
         tid = int(data.split("_")[2])
@@ -647,6 +660,7 @@ def callback_query(call):
         try: bot.send_message(tgt, "❌ <b>Gmail Task Rejected.</b> Protocol violated.", parse_mode="HTML")
         except: pass
 
+    # 👉 MAP REVIEW SYSTEM 
     elif data == "map_agree":
         if get_setting('map_review_task') == 'OFF':
             bot.answer_callback_query(call.id, "Map Task is currently disabled!", show_alert=True); return
@@ -693,7 +707,7 @@ def callback_query(call):
         run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
         bot.edit_message_text("❌ <b>Operation Aborted.</b> Re-queued to grid.", user_id, call.message.message_id, parse_mode="HTML")
 
-    # ADMIN MENUS
+    # 🛠️ ADMIN MENUS
     elif data == "admin_new_gmail_menu" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("➕ Add Single", callback_data="ngm_add_single"), InlineKeyboardButton("📚 Bulk Add", callback_data="ngm_add_bulk"))
@@ -734,12 +748,14 @@ def callback_query(call):
         user_states[user_id] = {'state': 'admin_map_add_bulk'}; bot.send_message(user_id, "📚 Send bulk list:\n<code>Link1 | Text1</code>", parse_mode="HTML")
     elif data == "map_edit_rules" and is_admin(user_id):
         user_states[user_id] = {'state': 'admin_set_map_rules'}; bot.send_message(user_id, "📝 Transmit new rules:")
+    
     elif data == "map_view_stock" and is_admin(user_id):
         records = run_query("SELECT id, link, review_text FROM map_tasks WHERE status='AVAILABLE' ORDER BY id ASC LIMIT 15", fetch='all')
         if not records: bot.answer_callback_query(call.id, "📦 Stock is completely empty!", show_alert=True); return
         msg = "📦 <b>CURRENT MAP TASK STOCK</b>\n━━━━━━━━━━━━━━━━━━━\n"
         for r in records: msg += f"🆔 <code>{r[0]}</code> | 🔗 {r[1]}\n💬 <code>{r[2][:20]}...</code>\n\n"
         bot.send_message(user_id, msg, parse_mode="HTML")
+
     elif data == "map_manage_task" and is_admin(user_id):
         user_states[user_id] = {'state': 'admin_map_manage_id'}
         bot.send_message(user_id, "📝 Please specify the <b>Task ID</b> to Manage:", parse_mode="HTML")
@@ -904,16 +920,31 @@ def callback_query(call):
             except: pass
             run_query("DELETE FROM pending_withdraws WHERE id=%s", (pid,), commit=True)
 
+# --- DUMMY SERVER FOR RAILWAY ---
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is Live & Running!")
+
+def run_dummy_server():
+    try:
+        port = int(os.environ.get('PORT', 8080))
+        server = HTTPServer(('0.0.0.0', port), DummyHandler)
+        print(f"🌐 Dummy Web Server started on port {port} for Railway Health Check")
+        server.serve_forever()
+    except Exception as e:
+        print(f"⚠️ Dummy Server Error: {e}")
+
 # --- START BOT ---
 if __name__ == "__main__":
-    print("🚀 Starting Bot... Checking Database Connection...")
+    print("🚀 Starting Bot & Services...")
+    threading.Thread(target=run_dummy_server, daemon=True).start()
     init_db()
-    print("✅ Database Connected and Synced!")
     try:
-        print("Clearing stuck webhooks to prevent 409 Conflict Errors...")
         bot.remove_webhook()
-    except Exception as e:
-        pass
-        
-    print("🤖 Bot Anti-Crash System Online. Running Infinity Polling...")
+        print("🧹 Cleared Old Webhooks")
+    except: pass
+    print("🤖 Infinity Polling Started Successfully...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
