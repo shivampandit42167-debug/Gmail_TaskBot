@@ -73,8 +73,15 @@ def init_db():
     run_query("INSERT INTO admins (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (OWNER_ID,), commit=True)
 
     default_settings = {
-        'bot_status': 'ON', 'create_gmail_task': 'ON', 'new_gmail_task': 'ON', 'old_gmail_task': 'ON',
-        'map_review_task': 'ON', 'withdraw': 'ON', 'min_upi': '15.0', 'min_usdt': '0.16',
+        'bot_status': 'ON', 
+        
+        # STATUS TOGGLES (ON/OFF - Closed Alerts)
+        'create_gmail_task': 'ON', 'new_gmail_task': 'ON', 'old_gmail_task': 'ON', 'map_review_task': 'ON', 'withdraw': 'ON',
+        
+        # VISIBILITY TOGGLES (Show/Hide Buttons)
+        'vis_create_gmail': 'ON', 'vis_new_gmail': 'ON', 'vis_old_gmail': 'ON', 'vis_map': 'ON', 'vis_withdraw': 'ON',
+        
+        'min_upi': '15.0', 'min_usdt': '0.16',
         'gmail_password': 'ethicbro999', 'reward_gmail': '15.0', 'reward_oldgmail': '15.0', 'reward_map': '10.0',
         'map_rules': '1. Open the provided link.\n2. Submit a 5-Star rating.\n3. Copy the exact text below and post it.\n4. Take a clear screenshot and submit it here.',
         'warning_photo': 'none',
@@ -160,7 +167,10 @@ def auto_broadcast_stock(count, task_type):
 def admin_markup(user_id):
     markup = InlineKeyboardMarkup()
     stat = get_setting('bot_status')
-    markup.row(InlineKeyboardButton(f"🤖 Bot Status: {stat}", callback_data="admin_bot_toggle"), InlineKeyboardButton("👁️ Visibility Toggles", callback_data="admin_toggles"))
+    markup.row(InlineKeyboardButton(f"🤖 Bot Power: {stat}", callback_data="admin_bot_toggle"))
+    # 🔥 Alag-Alag Toggles
+    markup.row(InlineKeyboardButton("👁️ Visibility Toggles", callback_data="admin_vis_toggles"), InlineKeyboardButton("⛔ Closed Alerts (ON/OFF)", callback_data="admin_stat_toggles"))
+    
     markup.row(InlineKeyboardButton("📧 Manage New Gmails", callback_data="admin_new_gmail_menu"), InlineKeyboardButton("🗺️ Manage Map Tasks", callback_data="admin_map_menu"))
     markup.row(InlineKeyboardButton("💰 Set Task Rewards", callback_data="admin_reward_menu"), InlineKeyboardButton("⚙️ Auto-Alert Setup", callback_data="admin_set_auto_alert"))
     if user_id == OWNER_ID: markup.row(InlineKeyboardButton("👥 Manage Admins", callback_data="admin_manage"))
@@ -171,20 +181,23 @@ def admin_markup(user_id):
     markup.row(InlineKeyboardButton("💸 Add Balance", callback_data="admin_addbal"))
     return markup
 
-# --- DYNAMIC MAIN MENU ---
+# --- DYNAMIC MAIN MENU (VISIBILITY CHECK) ---
 def main_menu(user_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     row1 = []
-    if get_setting('new_gmail_task') == 'ON': row1.append(KeyboardButton("📧 Get New Gmail Task"))
-    if get_setting('create_gmail_task') == 'ON': row1.append(KeyboardButton("📧 Create Gmail Task"))
+    if get_setting('vis_new_gmail') == 'ON': row1.append(KeyboardButton("📧 Get New Gmail Task"))
+    if get_setting('vis_create_gmail') == 'ON': row1.append(KeyboardButton("📧 Create Gmail Task"))
     if row1: markup.row(*row1)
     
     row2 = []
-    if get_setting('old_gmail_task') == 'ON': row2.append(KeyboardButton("📧 Old Gmail Task"))
-    if get_setting('map_review_task') == 'ON': row2.append(KeyboardButton("🗺️ Map Review Task"))
+    if get_setting('vis_old_gmail') == 'ON': row2.append(KeyboardButton("📧 Old Gmail Task"))
+    if get_setting('vis_map') == 'ON': row2.append(KeyboardButton("🗺️ Map Review Task"))
     if row2: markup.row(*row2)
     
-    markup.row(KeyboardButton("💰 Wallet"), KeyboardButton("💸 Withdraw"))
+    row3 = [KeyboardButton("💰 Wallet")]
+    if get_setting('vis_withdraw') == 'ON': row3.append(KeyboardButton("💸 Withdraw"))
+    markup.row(*row3)
+    
     markup.row(KeyboardButton("📞 Contact & Help"))
     if is_admin(user_id): markup.row(KeyboardButton("⚙️ Admin Panel"))
     return markup
@@ -264,7 +277,6 @@ def handle_all_messages(message):
             del user_states[user_id]
             return
 
-        # Fast Broadcast Thread Trigger
         if state == 'admin_wait_broadcast' and is_admin(user_id):
             del user_states[user_id] 
             bot.send_message(user_id, "🚀 <b>Broadcast Started in background!</b>\nYou can keep using the bot, you will be notified when it finishes.", parse_mode="HTML", reply_markup=main_menu(user_id))
@@ -370,11 +382,7 @@ def handle_all_messages(message):
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton("✅ I Agree (Initiate Task)", callback_data="map_agree"))
             markup.add(InlineKeyboardButton("🔙 Return to Main Menu", callback_data="back_to_main"))
-            if os.path.exists("31928.jpg"):
-                try: bot.send_photo(user_id, open("31928.jpg", "rb"), caption=msg, parse_mode="HTML", reply_markup=markup)
-                except: bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
-            else:
-                bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
+            bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
         elif text == "💰 Wallet":
             balance_inr = get_balance(user_id)
@@ -558,7 +566,7 @@ def handle_all_messages(message):
                 bot.send_message(user_id, f"✅ <b>Data Recorded:</b> <code>{text.strip()}</code>\n👉 Kindly provide the associated <b>Security Password</b>:", parse_mode="HTML")
 
             elif st == 'old_gmail_password':
-                bot.send_message(user_id, "✅ <b>Credentials securely transmitted.</b> Pending verification.", parse_mode="HTML", reply_markup=main_menu(user_id))
+                bot.send_message(user_id, "✅ <b>Your screenshot has been submitted to the admin. Please wait at least 24 hours for validation.</b>", parse_mode="HTML", reply_markup=main_menu(user_id))
                 markup = InlineKeyboardMarkup()
                 markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"oldappr_{user_id}"), InlineKeyboardButton("❌ Reject", callback_data=f"oldrej_{user_id}"))
                 bot.send_message(OWNER_ID, f"🔔 <b>OLD GMAIL SUBMISSION</b>\n👤 <code>{user_id}</code>\n📧 <code>{state_data['gmail_email']}</code>\n🔑 <code>{text.strip()}</code>", parse_mode="HTML", reply_markup=markup)
@@ -695,9 +703,14 @@ def callback_query(call):
         amt = float(data.split("_")[1])
         tid = int(data.split("_")[2])
         tgt = int(data.split("_")[3])
+        
+        t_gmail = run_query("SELECT gmail FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
+        t_gmail = t_gmail[0] if t_gmail else "Unknown"
+        
         add_balance(tgt, amt, f"New Gmail Task Approved (ID: {tid})")
         run_query("UPDATE new_gmail_tasks SET status='COMPLETED' WHERE id=%s", (tid,), commit=True)
-        try: bot.edit_message_caption(f"✅ Approved (₹{amt}) for <code>{tgt}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        
+        try: bot.edit_message_caption(f"✅ Approved (₹{amt}) | User: {tgt}\n📧 Gmail: <code>{t_gmail}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
         except: pass
         try: bot.send_message(tgt, f"🎉 <b>Gmail Task Approved!</b> ₹{amt} added.", parse_mode="HTML")
         except: pass
@@ -705,8 +718,13 @@ def callback_query(call):
     elif data.startswith("ngmrej_"):
         tid = int(data.split("_")[1])
         tgt = int(data.split("_")[2])
+        
+        t_gmail = run_query("SELECT gmail FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
+        t_gmail = t_gmail[0] if t_gmail else "Unknown"
+        
         run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE id=%s", (tid,), commit=True)
-        try: bot.edit_message_caption(f"❌ Rejected (Re-queued) for <code>{tgt}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        
+        try: bot.edit_message_caption(f"❌ Rejected (Re-queued) | User: {tgt}\n📧 Gmail: <code>{t_gmail}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
         except: pass
         try: bot.send_message(tgt, "❌ <b>Your Task Rejected: Gmail Problem.</b>", parse_mode="HTML")
         except: pass
@@ -759,7 +777,7 @@ def callback_query(call):
         run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
         bot.edit_message_text("❌ <b>Operation Aborted.</b> The task has been successfully re-queued to the grid.", user_id, call.message.message_id, parse_mode="HTML")
 
-    # 🔥 ADMIN MENUS 
+    # 🔥 ADMIN MENUS FOR NEW GMAIL
     elif data == "admin_new_gmail_menu" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("➕ Add Single", callback_data="ngm_add_single"), InlineKeyboardButton("📚 Bulk Add (One Password)", callback_data="ngm_add_bulk"))
@@ -792,6 +810,7 @@ def callback_query(call):
             msg += f"🆔 <b>ID:</b> <code>{r[0]}</code> | 📧 {r[1]} | 📌 {r[2]}\n"
         bot.send_message(user_id, msg, parse_mode="HTML")
 
+    # MAP TASK MANAGER
     elif data == "admin_map_menu" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("➕ Add Single Task", callback_data="map_add_single"))
@@ -883,29 +902,56 @@ def callback_query(call):
         user_states[user_id] = {'state': f'admin_set_{key}'}
         bot.send_message(user_id, "📝 Designate new numeric threshold (₹):")
 
-    elif data == "admin_toggles" and is_admin(user_id):
+    # 🔥 NEW: 2 Separate Menus (Visibility & Task Status)
+    elif data == "admin_vis_toggles" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
-        markup.row(InlineKeyboardButton(f"New Gmail: {'ON 🟢' if get_setting('new_gmail_task')=='ON' else 'OFF 🔴'}", callback_data="toggle_new_gmail_task"))
-        markup.row(InlineKeyboardButton(f"Create Gmail: {'ON 🟢' if get_setting('create_gmail_task')=='ON' else 'OFF 🔴'}", callback_data="toggle_create_gmail_task"))
-        markup.row(InlineKeyboardButton(f"Old Gmail: {'ON 🟢' if get_setting('old_gmail_task')=='ON' else 'OFF 🔴'}", callback_data="toggle_old_gmail_task"))
-        markup.row(InlineKeyboardButton(f"Map Task: {'ON 🟢' if get_setting('map_review_task')=='ON' else 'OFF 🔴'}", callback_data="toggle_map_review_task"))
-        markup.row(InlineKeyboardButton(f"Withdrawals: {'ON 🟢' if get_setting('withdraw')=='ON' else 'OFF 🔴'}", callback_data="toggle_withdraw"))
+        markup.row(InlineKeyboardButton(f"Vis New Gmail: {'ON 🟢' if get_setting('vis_new_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_new_gmail"))
+        markup.row(InlineKeyboardButton(f"Vis Create Gmail: {'ON 🟢' if get_setting('vis_create_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_create_gmail"))
+        markup.row(InlineKeyboardButton(f"Vis Old Gmail: {'ON 🟢' if get_setting('vis_old_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_old_gmail"))
+        markup.row(InlineKeyboardButton(f"Vis Map Task: {'ON 🟢' if get_setting('vis_map')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_map"))
+        markup.row(InlineKeyboardButton(f"Vis Withdraw: {'ON 🟢' if get_setting('vis_withdraw')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_withdraw"))
         markup.row(InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back"))
-        bot.edit_message_text("🎛️ <b>MENU VISIBILITY TOGGLES</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        bot.edit_message_text("👁️ <b>MENU VISIBILITY TOGGLES</b>\n(Turning these OFF will hide the button from users entirely)", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
 
-    elif data.startswith("toggle_") and is_admin(user_id):
-        key = data.replace("toggle_", "")
+    elif data == "admin_stat_toggles" and is_admin(user_id):
+        markup = InlineKeyboardMarkup()
+        markup.row(InlineKeyboardButton(f"Stat New Gmail: {'ON 🟢' if get_setting('new_gmail_task')=='ON' else 'OFF 🔴'}", callback_data="stoggle_new_gmail_task"))
+        markup.row(InlineKeyboardButton(f"Stat Create Gmail: {'ON 🟢' if get_setting('create_gmail_task')=='ON' else 'OFF 🔴'}", callback_data="stoggle_create_gmail_task"))
+        markup.row(InlineKeyboardButton(f"Stat Old Gmail: {'ON 🟢' if get_setting('old_gmail_task')=='ON' else 'OFF 🔴'}", callback_data="stoggle_old_gmail_task"))
+        markup.row(InlineKeyboardButton(f"Stat Map Task: {'ON 🟢' if get_setting('map_review_task')=='ON' else 'OFF 🔴'}", callback_data="stoggle_map_review_task"))
+        markup.row(InlineKeyboardButton(f"Stat Withdraw: {'ON 🟢' if get_setting('withdraw')=='ON' else 'OFF 🔴'}", callback_data="stoggle_withdraw"))
+        markup.row(InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back"))
+        bot.edit_message_text("⛔ <b>TASK STATUS TOGGLES</b>\n(If OFF, button still shows but clicks are rejected with 'Closed By Admin')", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+
+    elif data.startswith("vtoggle_") and is_admin(user_id):
+        key = data.replace("vtoggle_", "")
         current = get_setting(key)
         update_setting(key, "OFF" if current == "ON" else "ON")
-        bot.answer_callback_query(call.id, f"Visibility transitioned for {key}", show_alert=True)
         
         markup = InlineKeyboardMarkup()
-        markup.row(InlineKeyboardButton(f"New Gmail: {'ON 🟢' if get_setting('new_gmail_task')=='ON' else 'OFF 🔴'}", callback_data="toggle_new_gmail_task"))
-        markup.row(InlineKeyboardButton(f"Create Gmail: {'ON 🟢' if get_setting('create_gmail_task')=='ON' else 'OFF 🔴'}", callback_data="toggle_create_gmail_task"))
-        markup.row(InlineKeyboardButton(f"Old Gmail: {'ON 🟢' if get_setting('old_gmail_task')=='ON' else 'OFF 🔴'}", callback_data="toggle_old_gmail_task"))
-        markup.row(InlineKeyboardButton(f"Map Task: {'ON 🟢' if get_setting('map_review_task')=='ON' else 'OFF 🔴'}", callback_data="toggle_map_review_task"))
-        markup.row(InlineKeyboardButton(f"Withdrawals: {'ON 🟢' if get_setting('withdraw')=='ON' else 'OFF 🔴'}", callback_data="toggle_withdraw"))
+        markup.row(InlineKeyboardButton(f"Vis New Gmail: {'ON 🟢' if get_setting('vis_new_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_new_gmail"))
+        markup.row(InlineKeyboardButton(f"Vis Create Gmail: {'ON 🟢' if get_setting('vis_create_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_create_gmail"))
+        markup.row(InlineKeyboardButton(f"Vis Old Gmail: {'ON 🟢' if get_setting('vis_old_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_old_gmail"))
+        markup.row(InlineKeyboardButton(f"Vis Map Task: {'ON 🟢' if get_setting('vis_map')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_map"))
+        markup.row(InlineKeyboardButton(f"Vis Withdraw: {'ON 🟢' if get_setting('vis_withdraw')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_withdraw"))
         markup.row(InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back"))
+        
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+        bot.send_message(user_id, "🔄 Visibility updated dynamically. Keyboard refreshing...", reply_markup=main_menu(user_id))
+
+    elif data.startswith("stoggle_") and is_admin(user_id):
+        key = data.replace("stoggle_", "")
+        current = get_setting(key)
+        update_setting(key, "OFF" if current == "ON" else "ON")
+        
+        markup = InlineKeyboardMarkup()
+        markup.row(InlineKeyboardButton(f"Stat New Gmail: {'ON 🟢' if get_setting('new_gmail_task')=='ON' else 'OFF 🔴'}", callback_data="stoggle_new_gmail_task"))
+        markup.row(InlineKeyboardButton(f"Stat Create Gmail: {'ON 🟢' if get_setting('create_gmail_task')=='ON' else 'OFF 🔴'}", callback_data="stoggle_create_gmail_task"))
+        markup.row(InlineKeyboardButton(f"Stat Old Gmail: {'ON 🟢' if get_setting('old_gmail_task')=='ON' else 'OFF 🔴'}", callback_data="stoggle_old_gmail_task"))
+        markup.row(InlineKeyboardButton(f"Stat Map Task: {'ON 🟢' if get_setting('map_review_task')=='ON' else 'OFF 🔴'}", callback_data="stoggle_map_review_task"))
+        markup.row(InlineKeyboardButton(f"Stat Withdraw: {'ON 🟢' if get_setting('withdraw')=='ON' else 'OFF 🔴'}", callback_data="stoggle_withdraw"))
+        markup.row(InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back"))
+        
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
 
     elif data == "admin_bot_toggle" and is_admin(user_id):
