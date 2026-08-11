@@ -4,6 +4,8 @@ import psycopg2
 import datetime
 import time
 import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # --- CONFIGURATION ---
 TOKEN = '8683212510:AAEdE8kq5-5GuKerfPa_Mzaxovgb-J5VU4w'
@@ -18,7 +20,26 @@ USDT_TO_INR_RATE = 94.0
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
-# --- DATABASE CONNECTION HELPER (Crash Proof for Neon DB) ---
+# --- ANTI-CRASH RAILWAY HEALTH SERVER ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is LIVE and running perfectly!")
+    def log_message(self, format, *args):
+        pass # Hide unnecessary server logs
+
+def run_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
+
+# Start the health server in background
+threading.Thread(target=run_health_server, daemon=True).start()
+
+
+# --- DATABASE CONNECTION HELPER (Crash Proof) ---
 def run_query(query, params=(), fetch=None, commit=False):
     retries = 3
     for attempt in range(retries):
@@ -42,11 +63,10 @@ def run_query(query, params=(), fetch=None, commit=False):
             conn.close()
             return res
         except Exception as e:
-            print(f"⚠️ DB Warning (Attempt {attempt+1}/{retries}): {e}")
             time.sleep(2)
     return None
 
-# --- DATABASE SETUP (POSTGRESQL) ---
+# --- DATABASE SETUP ---
 def init_db():
     run_query('''CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, balance FLOAT DEFAULT 0)''', commit=True)
     run_query('''ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT DEFAULT 'Unknown' ''', commit=True)
@@ -56,7 +76,6 @@ def init_db():
     run_query('''CREATE TABLE IF NOT EXISTS admins (user_id BIGINT PRIMARY KEY)''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS map_tasks (id SERIAL PRIMARY KEY, link TEXT, review_text TEXT, status TEXT DEFAULT 'AVAILABLE', assigned_to BIGINT)''', commit=True)
     
-    # NEW GMAIL TASK TABLE
     run_query('''CREATE TABLE IF NOT EXISTS new_gmail_tasks (
                  id SERIAL PRIMARY KEY, gmail TEXT, password TEXT, status TEXT DEFAULT 'AVAILABLE', 
                  assigned_to BIGINT, assigned_time TIMESTAMP)''', commit=True)
@@ -81,6 +100,8 @@ def init_db():
     }
     for k, v in default_settings.items():
         run_query("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", (k, v), commit=True)
+
+init_db()
 
 # --- HELPER FUNCTIONS ---
 def is_admin(user_id):
@@ -138,10 +159,8 @@ def admin_markup(user_id):
     markup.row(InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"), InlineKeyboardButton("💸 Add Balance", callback_data="admin_addbal"))
     return markup
 
-# --- DYNAMIC MAIN MENU ---
 def main_menu(user_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    
     if get_setting('new_gmail_task') == 'ON':
         markup.row(KeyboardButton("📧 Get New Gmail Task"))
         
@@ -161,7 +180,6 @@ def main_menu(user_id):
     
     if is_admin(user_id):
         markup.row(KeyboardButton("⚙️ Admin Panel"))
-        
     return markup
 
 @bot.message_handler(commands=['start'])
@@ -187,7 +205,6 @@ def send_welcome(message):
            f"🔰 <b>Please select an option below to begin:</b>")
     bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=main_menu(user_id))
 
-# --- MAIN TEXT HANDLER ---
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document'])
 def handle_all_messages(message):
     user_id = message.chat.id
@@ -591,7 +608,7 @@ def callback_query(call):
         limit = 1 if mode == "single" else 10
         tasks = run_query(f'''
             UPDATE new_gmail_tasks SET status='PENDING', assigned_to=%s, assigned_time=NOW() 
-            WHERE id IN (SELECT id FROM new_gmail_tasks WHERE status='AVAILABLE' LIMIT {limit} FOR UPDATE SKIP LOCKED) 
+            WHERE id IN (SELECT id FROM new_gmail_tasks WHERE status='AVAILABLE' LIMIT {limit}) 
             RETURNING id, gmail, password
         ''', (user_id,), fetch='all', commit=True)
         
@@ -665,7 +682,7 @@ def callback_query(call):
                 SELECT id FROM map_tasks 
                 WHERE status='AVAILABLE' 
                 AND review_text NOT IN (SELECT review_text FROM map_tasks WHERE assigned_to=%s AND status='COMPLETED') 
-                LIMIT 1 FOR UPDATE SKIP LOCKED
+                LIMIT 1 
             ) 
             RETURNING id, link, review_text
         ''', (user_id, user_id), fetch='one', commit=True)
@@ -692,6 +709,7 @@ def callback_query(call):
         run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
         bot.edit_message_text("❌ <b>Operation Aborted.</b> Re-queued to grid.", user_id, call.message.message_id, parse_mode="HTML")
 
+    # ADMIN MENUS
     elif data == "admin_new_gmail_menu" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("➕ Add Single", callback_data="ngm_add_single"), InlineKeyboardButton("📚 Bulk Add", callback_data="ngm_add_bulk"))
@@ -879,7 +897,6 @@ def callback_query(call):
             try: bot.edit_message_caption(f"❌ Denied for {tgt}", call.message.chat.id, call.message.message_id)
             except: bot.edit_message_text(f"❌ Denied for {tgt}", call.message.chat.id, call.message.message_id)
 
-    # Withdraw Handling
     elif data.startswith("apprw_") and is_admin(user_id): 
         pid = int(data.split("_")[1])
         req = run_query("SELECT user_id, amount, method, address FROM pending_withdraws WHERE id=%s", (pid,), fetch='one')
@@ -904,14 +921,11 @@ def callback_query(call):
             except: pass
             run_query("DELETE FROM pending_withdraws WHERE id=%s", (pid,), commit=True)
 
-# --- START BOT ---
+# --- START BOT WITH AUTO-RESTART ---
 if __name__ == "__main__":
-    print("🚀 Connecting to Database...")
-    init_db()
-    print("✅ Database Connected!")
-    try:
-        bot.remove_webhook()
-        print("🧹 Cleared Old Webhooks")
-    except: pass
-    print("🤖 Bot Active. Running Polling...")
-    bot.infinity_polling(timeout=20, long_polling_timeout=10)
+    while True:
+        try:
+            bot.remove_webhook()
+            bot.infinity_polling(timeout=20, long_polling_timeout=10)
+        except Exception as e:
+            time.sleep(3)
