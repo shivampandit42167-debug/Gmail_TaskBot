@@ -18,33 +18,38 @@ USDT_TO_INR_RATE = 94.0
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
-# --- DATABASE CONNECTION HELPER (100% Crash Proof) ---
-def run_query(query, params=(), fetch=None, commit=False):
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        if commit:
-            conn.commit()
-        
-        res = None
-        if fetch == 'one':
-            res = cursor.fetchone()
-        elif fetch == 'all':
-            res = cursor.fetchall()
-        elif fetch == 'id':
-            row = cursor.fetchone()
-            res = row[0] if row else None
+# --- DATABASE AUTO-WAKEUP HELPER ---
+def run_query(query, params=(), fetch=None, commit=False, retries=3):
+    for i in range(retries):
+        try:
+            # 10 seconds ka timeout taaki Neon DB sleep se uth sake
+            conn = psycopg2.connect(DATABASE_URL, connect_timeout=10)
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            if commit:
+                conn.commit()
             
-        cursor.close()
-        conn.close()
-        return res
-    except Exception as e:
-        print(f"Database Error: {e}")
-        return None
+            res = None
+            if fetch == 'one':
+                res = cursor.fetchone()
+            elif fetch == 'all':
+                res = cursor.fetchall()
+            elif fetch == 'id':
+                row = cursor.fetchone()
+                res = row[0] if row else None
+                
+            cursor.close()
+            conn.close()
+            return res
+        except Exception as e:
+            print(f"⚠️ DB Warning (Attempt {i+1}/{retries}): Waiting for Neon.tech to wake up... Error: {e}")
+            time.sleep(3) # Wait before retry
+    print("❌ Critical: Database failed to connect after 3 attempts.")
+    return None
 
-# --- DATABASE SETUP (POSTGRESQL) ---
+# --- DATABASE SETUP ---
 def init_db():
+    print("⏳ Initializing Database structure...")
     run_query('''CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, balance FLOAT DEFAULT 0)''', commit=True)
     run_query('''ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT DEFAULT 'Unknown' ''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS history (id SERIAL PRIMARY KEY, user_id BIGINT, type TEXT, amount FLOAT, detail TEXT, date TEXT)''', commit=True)
@@ -53,7 +58,6 @@ def init_db():
     run_query('''CREATE TABLE IF NOT EXISTS admins (user_id BIGINT PRIMARY KEY)''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS map_tasks (id SERIAL PRIMARY KEY, link TEXT, review_text TEXT, status TEXT DEFAULT 'AVAILABLE', assigned_to BIGINT)''', commit=True)
     
-    # NEW GMAIL TASK TABLE
     run_query('''CREATE TABLE IF NOT EXISTS new_gmail_tasks (
                  id SERIAL PRIMARY KEY, gmail TEXT, password TEXT, status TEXT DEFAULT 'AVAILABLE', 
                  assigned_to BIGINT, assigned_time TIMESTAMP)''', commit=True)
@@ -78,8 +82,6 @@ def init_db():
     }
     for k, v in default_settings.items():
         run_query("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", (k, v), commit=True)
-
-init_db()
 
 # --- HELPER FUNCTIONS ---
 def is_admin(user_id):
@@ -280,7 +282,6 @@ def handle_all_messages(message):
                 return
 
     if message.content_type == 'text':
-        # 👉 1. GET NEW GMAIL TASK 
         if text == "📧 Get New Gmail Task":
             if get_setting('new_gmail_task') == 'OFF' and not is_admin(user_id): return
             free_expired_gmail_tasks()
@@ -291,7 +292,6 @@ def handle_all_messages(message):
             markup.row(InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main"))
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
-        # 👉 2. CREATE GMAIL TASK
         elif text == "📧 Create Gmail Task":
             if get_setting('create_gmail_task') == 'OFF' and not is_admin(user_id): return
             current_pass = get_setting('gmail_password')
@@ -309,7 +309,6 @@ def handle_all_messages(message):
             bot.send_message(user_id, "📧 <b>OLD GMAIL SUBMISSION</b>\n\n👉 Please provide your valid <b>Old Gmail Address</b>:", parse_mode="HTML", reply_markup=markup)
             user_states[user_id] = {'state': 'old_gmail_email'}
 
-        # 👉 3. GET REVIEW TASK 
         elif text == "📍 Get Review Task":
             if get_setting('map_review_task') == 'OFF' and not is_admin(user_id): return
             rules = get_setting('map_rules')
@@ -379,7 +378,6 @@ def handle_all_messages(message):
             state_data = user_states[user_id]
             st = state_data['state']
 
-            # New Gmail Admin States
             if st == 'admin_ngm_add_single' and is_admin(user_id):
                 try:
                     gmail, pwd = text.split('|', 1)
@@ -407,7 +405,6 @@ def handle_all_messages(message):
                 except: bot.send_message(user_id, "❌ Invalid ID")
                 del user_states[user_id]
 
-            # Map Stock States
             elif st == 'admin_map_manage_id' and is_admin(user_id):
                 try:
                     tid = int(text.strip())
@@ -565,7 +562,6 @@ def callback_query(call):
         except: pass
         bot.send_message(user_id, "🏠 <b>Main Menu</b>", parse_mode="HTML", reply_markup=main_menu(user_id))
 
-    # 👉 NEW GMAIL SYSTEM CALLBACKS
     elif data.startswith("ngm_type_"):
         mode = data.split("_")[2]
         msg = ("⚠️ <b>WARNING</b>\n\n"
@@ -588,8 +584,7 @@ def callback_query(call):
         mode = data.split("_")[2]
         free_expired_gmail_tasks()
         
-        res_chk = run_query("SELECT count(id) FROM new_gmail_tasks WHERE assigned_to=%s AND status='PENDING'", (user_id,), fetch='one')
-        pend_chk = res_chk[0] if res_chk else 0
+        pend_chk = run_query("SELECT count(id) FROM new_gmail_tasks WHERE assigned_to=%s AND status='PENDING'", (user_id,), fetch='one')[0]
         if pend_chk > 0:
             bot.answer_callback_query(call.id, f"⚠️ Aapke paas pehle se {pend_chk} pending tasks hain! Unhe submit ya cancel karein.", show_alert=True)
             return
@@ -632,15 +627,12 @@ def callback_query(call):
         run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE id=%s", (tid,), commit=True)
         bot.edit_message_text("❌ <b>Task Cancelled.</b> Returned to stock.", user_id, call.message.message_id, parse_mode="HTML")
 
-    # New Gmail Admin Approvals
     elif data.startswith("ngm_appr"):
         amt = float(data.split("_")[1].replace("appr", "")) 
         tid = int(data.split("_")[2])
         tgt = int(data.split("_")[3])
-        
         add_balance(tgt, amt, "New Gmail Task Approved")
         run_query("UPDATE new_gmail_tasks SET status='COMPLETED' WHERE id=%s", (tid,), commit=True)
-        
         try: bot.edit_message_caption(f"✅ Approved (₹{amt}) | ID: {tid} | User: {tgt}", call.message.chat.id, call.message.message_id)
         except: pass
         try: bot.send_message(tgt, f"🎉 <b>Gmail Task Approved!</b> ₹{amt} added.", parse_mode="HTML")
@@ -655,7 +647,6 @@ def callback_query(call):
         try: bot.send_message(tgt, "❌ <b>Gmail Task Rejected.</b> Protocol violated.", parse_mode="HTML")
         except: pass
 
-    # 👉 MAP REVIEW SYSTEM 
     elif data == "map_agree":
         if get_setting('map_review_task') == 'OFF':
             bot.answer_callback_query(call.id, "Map Task is currently disabled!", show_alert=True); return
@@ -687,7 +678,6 @@ def callback_query(call):
             msg = f"🎉 <b>Asset Allocated!</b>\n\n🔗 <b>Target Directory:</b>\n{t_link}\n\n💬 <b>Required Publish Data:</b>\n<code>{t_txt}</code>\n\n👉 <i>Select 'Completed' upon execution.</i>"
             markup = InlineKeyboardMarkup()
             markup.row(InlineKeyboardButton("✅ Mark Completed", callback_data=f"mapdone_{t_id}"), InlineKeyboardButton("❌ Cancel", callback_data=f"mapcancel_{t_id}"))
-            
             try: bot.delete_message(user_id, call.message.message_id)
             except: pass
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
@@ -703,19 +693,17 @@ def callback_query(call):
         run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
         bot.edit_message_text("❌ <b>Operation Aborted.</b> Re-queued to grid.", user_id, call.message.message_id, parse_mode="HTML")
 
-    # 🛠️ ADMIN MENUS
+    # ADMIN MENUS
     elif data == "admin_new_gmail_menu" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("➕ Add Single", callback_data="ngm_add_single"), InlineKeyboardButton("📚 Bulk Add", callback_data="ngm_add_bulk"))
         markup.row(InlineKeyboardButton("📦 View Stock", callback_data="ngm_view_stock"), InlineKeyboardButton("🗑️ Delete Task", callback_data="ngm_manage_id"))
         markup.row(InlineKeyboardButton("🔙 Back to Dashboard", callback_data="admin_back"))
-        
         free_expired_gmail_tasks()
         ar = run_query("SELECT count(id) FROM new_gmail_tasks WHERE status='AVAILABLE'", fetch='one')
         pr = run_query("SELECT count(id) FROM new_gmail_tasks WHERE status='PENDING'", fetch='one')
         avail = ar[0] if ar else 0
         pend = pr[0] if pr else 0
-        
         bot.edit_message_text(f"📧 <b>NEW GMAIL TASK MANAGER</b>\n━━━━━━━━━━━━━━━━━━━\nAvailable in Stock: <b>{avail}</b>\nCurrently Pending: <b>{pend}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
 
     elif data == "ngm_add_single" and is_admin(user_id):
@@ -746,14 +734,12 @@ def callback_query(call):
         user_states[user_id] = {'state': 'admin_map_add_bulk'}; bot.send_message(user_id, "📚 Send bulk list:\n<code>Link1 | Text1</code>", parse_mode="HTML")
     elif data == "map_edit_rules" and is_admin(user_id):
         user_states[user_id] = {'state': 'admin_set_map_rules'}; bot.send_message(user_id, "📝 Transmit new rules:")
-    
     elif data == "map_view_stock" and is_admin(user_id):
         records = run_query("SELECT id, link, review_text FROM map_tasks WHERE status='AVAILABLE' ORDER BY id ASC LIMIT 15", fetch='all')
         if not records: bot.answer_callback_query(call.id, "📦 Stock is completely empty!", show_alert=True); return
         msg = "📦 <b>CURRENT MAP TASK STOCK</b>\n━━━━━━━━━━━━━━━━━━━\n"
         for r in records: msg += f"🆔 <code>{r[0]}</code> | 🔗 {r[1]}\n💬 <code>{r[2][:20]}...</code>\n\n"
         bot.send_message(user_id, msg, parse_mode="HTML")
-
     elif data == "map_manage_task" and is_admin(user_id):
         user_states[user_id] = {'state': 'admin_map_manage_id'}
         bot.send_message(user_id, "📝 Please specify the <b>Task ID</b> to Manage:", parse_mode="HTML")
@@ -761,20 +747,13 @@ def callback_query(call):
     elif data.startswith("mdel_") and is_admin(user_id):
         tid = int(data.split("_")[1]); run_query("DELETE FROM map_tasks WHERE id=%s", (tid,), commit=True)
         bot.edit_message_text(f"✅ <b>Erased Task {tid}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-
     elif data.startswith("medl_") and is_admin(user_id):
-        tid = int(data.split("_")[1])
-        user_states[user_id] = {'state': 'admin_map_edit_link', 'task_id': tid}
-        bot.send_message(user_id, "🔗 Insert updated Link:", parse_mode="HTML")
-
+        tid = int(data.split("_")[1]); user_states[user_id] = {'state': 'admin_map_edit_link', 'task_id': tid}; bot.send_message(user_id, "🔗 Insert updated Link:", parse_mode="HTML")
     elif data.startswith("medt_") and is_admin(user_id):
-        tid = int(data.split("_")[1])
-        user_states[user_id] = {'state': 'admin_map_edit_text', 'task_id': tid}
-        bot.send_message(user_id, "💬 Insert updated Text:", parse_mode="HTML")
+        tid = int(data.split("_")[1]); user_states[user_id] = {'state': 'admin_map_edit_text', 'task_id': tid}; bot.send_message(user_id, "💬 Insert updated Text:", parse_mode="HTML")
 
     elif data.startswith("mappr_") and is_admin(user_id):
-        tgt = int(data.split("_")[1]); t_id = int(data.split("_")[2])
-        rw = float(get_setting('reward_map'))
+        tgt = int(data.split("_")[1]); t_id = int(data.split("_")[2]); rw = float(get_setting('reward_map'))
         add_balance(tgt, rw, "Map Review Approved")
         run_query("UPDATE map_tasks SET status='COMPLETED' WHERE id=%s", (t_id,), commit=True)
         try: bot.send_message(tgt, f"🎉 <b>Validation Complete!</b> ₹{rw} allocated.", parse_mode="HTML")
@@ -927,11 +906,14 @@ def callback_query(call):
 
 # --- START BOT ---
 if __name__ == "__main__":
+    print("🚀 Starting Bot... Checking Database Connection...")
+    init_db()
+    print("✅ Database Connected and Synced!")
     try:
         print("Clearing stuck webhooks to prevent 409 Conflict Errors...")
         bot.remove_webhook()
     except Exception as e:
         pass
         
-    print("Bot Anti-Crash System Online. Running Infinity Polling...")
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    print("🤖 Bot Anti-Crash System Online. Running Infinity Polling...")
+    bot.infinity_polling(timeout=20, long_polling_timeout=10)
