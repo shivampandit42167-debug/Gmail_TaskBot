@@ -41,7 +41,7 @@ def run_query(query, params=(), fetch=None, commit=False):
 # --- DATABASE SETUP (POSTGRESQL) ---
 def init_db():
     run_query('''CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, balance FLOAT DEFAULT 0)''', commit=True)
-    run_query('''ALTER TABLE users ADD COLUMN username TEXT DEFAULT 'Unknown' ''', commit=True)
+    run_query('''ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT DEFAULT 'Unknown' ''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS history (id SERIAL PRIMARY KEY, user_id BIGINT, type TEXT, amount FLOAT, detail TEXT, date TEXT)''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS pending_withdraws (id SERIAL PRIMARY KEY, user_id BIGINT, method TEXT, address TEXT, amount FLOAT)''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS approved_withdraws (id SERIAL PRIMARY KEY, user_id BIGINT, method TEXT, address TEXT, amount FLOAT, date TEXT)''', commit=True)
@@ -133,16 +133,31 @@ def admin_markup(user_id):
     markup.row(InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"), InlineKeyboardButton("💸 Add Balance", callback_data="admin_addbal"))
     return markup
 
-# --- MAIN MENU ---
+# --- DYNAMIC MAIN MENU ---
 def main_menu(user_id):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row(KeyboardButton("📧 Get New Gmail Task"))
-    markup.row(KeyboardButton("📧 Create Gmail Task"), KeyboardButton("📧 Old Gmail Task"))
-    markup.row(KeyboardButton("📍 Get Review Task"))
+    
+    # 🔴 HIDE BUTTONS IF TASK IS OFF
+    if get_setting('new_gmail_task') == 'ON':
+        markup.row(KeyboardButton("📧 Get New Gmail Task"))
+        
+    gmail_row = []
+    if get_setting('create_gmail_task') == 'ON':
+        gmail_row.append(KeyboardButton("📧 Create Gmail Task"))
+    if get_setting('old_gmail_task') == 'ON':
+        gmail_row.append(KeyboardButton("📧 Old Gmail Task"))
+    if gmail_row:
+        markup.row(*gmail_row)
+        
+    if get_setting('map_review_task') == 'ON':
+        markup.row(KeyboardButton("📍 Get Review Task"))
+        
     markup.row(KeyboardButton("💰 Wallet"), KeyboardButton("💸 Withdraw"))
     markup.row(KeyboardButton("📞 Contact & Help"))
+    
     if is_admin(user_id):
         markup.row(KeyboardButton("⚙️ Admin Panel"))
+        
     return markup
 
 @bot.message_handler(commands=['start'])
@@ -264,9 +279,7 @@ def handle_all_messages(message):
     if message.content_type == 'text':
         # 👉 1. GET NEW GMAIL TASK (Advanced Flow)
         if text == "📧 Get New Gmail Task":
-            if get_setting('new_gmail_task') == 'OFF' and not is_admin(user_id):
-                bot.send_message(user_id, "❌ <b>Currently Unavailable</b>", parse_mode="HTML")
-                return
+            if get_setting('new_gmail_task') == 'OFF' and not is_admin(user_id): return
             
             # Clear expired tasks dynamically
             free_expired_gmail_tasks()
@@ -280,9 +293,7 @@ def handle_all_messages(message):
 
         # 👉 2. CREATE GMAIL TASK (Legacy Flow)
         elif text == "📧 Create Gmail Task":
-            if get_setting('create_gmail_task') == 'OFF' and not is_admin(user_id):
-                bot.send_message(user_id, "❌ <b>Currently Unavailable</b>", parse_mode="HTML")
-                return
+            if get_setting('create_gmail_task') == 'OFF' and not is_admin(user_id): return
             current_pass = get_setting('gmail_password')
             reward = get_setting('reward_gmail')
             msg = (f"📧 <b>GMAIL CREATION TASK</b>\n💰 <b>Reward:</b> ₹{reward}\n\n⚠️ <b>Instructions:</b>\n"
@@ -293,18 +304,14 @@ def handle_all_messages(message):
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
         elif text == "📧 Old Gmail Task":
-            if get_setting('old_gmail_task') == 'OFF' and not is_admin(user_id):
-                bot.send_message(user_id, "❌ <b>Currently Unavailable</b>", parse_mode="HTML")
-                return
+            if get_setting('old_gmail_task') == 'OFF' and not is_admin(user_id): return
             markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Return to Main Menu", callback_data="back_to_main"))
             bot.send_message(user_id, "📧 <b>OLD GMAIL SUBMISSION</b>\n\n👉 Please provide your valid <b>Old Gmail Address</b>:", parse_mode="HTML", reply_markup=markup)
             user_states[user_id] = {'state': 'old_gmail_email'}
 
         # 👉 3. GET REVIEW TASK (Map Review Flow)
         elif text == "📍 Get Review Task":
-            if get_setting('map_review_task') == 'OFF' and not is_admin(user_id):
-                bot.send_message(user_id, "❌ <b>Map Reviews are currently disabled.</b>", parse_mode="HTML")
-                return
+            if get_setting('map_review_task') == 'OFF' and not is_admin(user_id): return
             rules = get_setting('map_rules')
             reward = get_setting('reward_map')
             msg = (f"🗺️ <b>GOOGLE MAPS REVIEW</b>\n💰 <b>Reward:</b> ₹{reward}\n\n📜 <b>Guidelines:</b>\n{rules}\n\n👇 <i>Accept terms to receive assignment:</i>")
@@ -556,6 +563,7 @@ def callback_query(call):
         if user_id in user_states: del user_states[user_id]
         try: bot.delete_message(user_id, call.message.message_id)
         except: pass
+        # When user goes back, give them fresh keyboard
         bot.send_message(user_id, "🏠 <b>Main Menu</b>", parse_mode="HTML", reply_markup=main_menu(user_id))
 
     # 👉 NEW GMAIL SYSTEM CALLBACKS
@@ -581,7 +589,6 @@ def callback_query(call):
         mode = data.split("_")[2]
         free_expired_gmail_tasks() # Clear old ones
         
-        # Check if user already has pending tasks
         pend_chk = run_query("SELECT count(id) FROM new_gmail_tasks WHERE assigned_to=%s AND status='PENDING'", (user_id,), fetch='one')[0]
         if pend_chk > 0:
             bot.answer_callback_query(call.id, f"⚠️ Aapke paas pehle se {pend_chk} pending tasks hain! Unhe submit ya cancel karein.", show_alert=True)
@@ -627,7 +634,7 @@ def callback_query(call):
 
     # New Gmail Admin Approvals
     elif data.startswith("ngm_appr"):
-        amt = float(data.split("_")[1].replace("appr", "")) # Extracts 15 or 20
+        amt = float(data.split("_")[1].replace("appr", "")) 
         tid = int(data.split("_")[2])
         tgt = int(data.split("_")[3])
         
@@ -642,14 +649,13 @@ def callback_query(call):
     elif data.startswith("ngm_rej_"):
         tid = int(data.split("_")[2])
         tgt = int(data.split("_")[3])
-        # Return to stock safely
         run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE id=%s", (tid,), commit=True)
         try: bot.edit_message_caption(f"❌ Rejected & Returned to Stock | ID: {tid}", call.message.chat.id, call.message.message_id)
         except: pass
         try: bot.send_message(tgt, "❌ <b>Gmail Task Rejected.</b> Protocol violated.", parse_mode="HTML")
         except: pass
 
-    # 👉 MAP REVIEW SYSTEM (Exclusivity Bug Fixed)
+    # 👉 MAP REVIEW SYSTEM 
     elif data == "map_agree":
         if get_setting('map_review_task') == 'OFF':
             bot.answer_callback_query(call.id, "Map Task is currently disabled!", show_alert=True); return
@@ -663,7 +669,6 @@ def callback_query(call):
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
             return
 
-        # BUG FIX: Ensure user NEVER gets a review text they have already COMPLETED.
         task = run_query('''
             UPDATE map_tasks SET status='PENDING', assigned_to=%s 
             WHERE id = (
@@ -712,17 +717,11 @@ def callback_query(call):
         bot.edit_message_text(f"📧 <b>NEW GMAIL TASK MANAGER</b>\n━━━━━━━━━━━━━━━━━━━\nAvailable in Stock: <b>{avail}</b>\nCurrently Pending: <b>{pend}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
 
     elif data == "ngm_add_single" and is_admin(user_id):
-        user_states[user_id] = {'state': 'admin_ngm_add_single'}
-        bot.send_message(user_id, "📝 Send as:\n<code>email@gmail.com | password123</code>", parse_mode="HTML")
-
+        user_states[user_id] = {'state': 'admin_ngm_add_single'}; bot.send_message(user_id, "📝 Send as:\n<code>email@gmail.com | password123</code>", parse_mode="HTML")
     elif data == "ngm_add_bulk" and is_admin(user_id):
-        user_states[user_id] = {'state': 'admin_ngm_add_bulk'}
-        bot.send_message(user_id, "📚 Send bulk list (one per line):\n<code>e1@gmail.com | pass1</code>\n<code>e2@gmail.com | pass2</code>", parse_mode="HTML")
-
+        user_states[user_id] = {'state': 'admin_ngm_add_bulk'}; bot.send_message(user_id, "📚 Send bulk list (one per line):\n<code>e1@gmail.com | pass1</code>\n<code>e2@gmail.com | pass2</code>", parse_mode="HTML")
     elif data == "ngm_manage_id" and is_admin(user_id):
-        user_states[user_id] = {'state': 'admin_ngm_manage_id'}
-        bot.send_message(user_id, "🗑️ Enter Task ID to Delete:")
-
+        user_states[user_id] = {'state': 'admin_ngm_manage_id'}; bot.send_message(user_id, "🗑️ Enter Task ID to Delete:")
     elif data == "ngm_view_stock" and is_admin(user_id):
         records = run_query("SELECT id, gmail, status FROM new_gmail_tasks WHERE status != 'COMPLETED' ORDER BY id ASC LIMIT 20", fetch='all')
         if not records: bot.answer_callback_query(call.id, "📦 Stock empty!", show_alert=True); return
@@ -820,6 +819,8 @@ def callback_query(call):
         key = data.replace("toggle_", "")
         update_setting(key, "OFF" if get_setting(key) == "ON" else "ON")
         bot.answer_callback_query(call.id, f"Transitioned {key}", show_alert=True)
+        # Dynamic keyboard refresh for admin when toggling options back and forth isn't immediate on the reply keyboard until they hit back
+        bot.send_message(user_id, "🔄 Menu updated. Refreshing keyboard...", reply_markup=main_menu(user_id))
 
     elif data == "admin_bot_toggle" and is_admin(user_id):
         update_setting('bot_status', "OFF" if get_setting('bot_status') == "ON" else "ON")
@@ -923,5 +924,5 @@ def callback_query(call):
             run_query("DELETE FROM pending_withdraws WHERE id=%s", (pid,), commit=True)
 
 # --- START BOT ---
-print("Bot Advanced System Online.")
+print("Bot Dynamic Menu Active.")
 bot.polling(none_stop=True)
