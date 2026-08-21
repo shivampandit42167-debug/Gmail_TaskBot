@@ -37,7 +37,6 @@ threading.Thread(target=run_health_server, daemon=True).start()
 
 # --- SUPER FAST DATABASE POOL (0.1s Response Time) ---
 try:
-    # Always keeps 5 connections open, scales up to 50 instantly.
     db_pool = psycopg2.pool.ThreadedConnectionPool(5, 50, DATABASE_URL)
     print("✅ Turbo DB Pool Connected!")
 except Exception as e:
@@ -65,7 +64,7 @@ def run_query(query, params=(), fetch=None, commit=False):
             return res
         except Exception as e:
             if conn:
-                db_pool.putconn(conn, close=True) # Clear broken connection
+                db_pool.putconn(conn, close=True) 
             time.sleep(0.2)
     return None
 
@@ -287,7 +286,6 @@ def handle_all_messages(message):
             threading.Thread(target=process_broadcast, args=(user_id, message.message_id)).start()
             return
             
-        # 🔥 NEW GMAIL PROOF SUBMISSION (Show ID + Password securely to Admin)
         if state == 'new_gmail_task_ss':
             if message.content_type == 'photo':
                 tid = user_states[user_id]['task_id']
@@ -914,8 +912,10 @@ def callback_query(call):
                             f"📧 <b>Gmail:</b> <code>{gmail}</code>\n"
                             f"🔑 <b>Pass:</b> <code>{pwd}</code>")
             
-            try: bot.send_photo(user_id, ss, caption=caption_text, parse_mode="HTML", reply_markup=markup)
-            except: bot.send_message(user_id, "⚠️ User ka screenshot expired. Task Reject karo.", reply_markup=markup)
+            try: 
+                bot.send_photo(user_id, ss, caption=caption_text, parse_mode="HTML", reply_markup=markup)
+            except: 
+                bot.send_message(user_id, f"⚠️ <b>Screenshot Expired/Error!</b>\n\n{caption_text}", parse_mode="HTML", reply_markup=markup)
         else:
             bot.send_message(user_id, "No pending Gmail tasks left!", parse_mode="HTML")
             
@@ -930,8 +930,11 @@ def callback_query(call):
             try: bot.delete_message(user_id, call.message.message_id)
             except: pass
             
-            try: bot.send_photo(user_id, ss, caption=f"🗺️ <b>PENDING MAP REVIEW</b>\n👤 <code>{assigned_to}</code>\n🔖 Task ID: {tid}\n\n🔗 Link: {link}\n💬 Text: <code>{text}</code>", parse_mode="HTML", reply_markup=markup)
-            except: bot.send_message(user_id, "⚠️ User ka screenshot expired. Task Reject karo.", reply_markup=markup)
+            caption_text = f"🗺️ <b>PENDING MAP REVIEW</b>\n👤 <code>{assigned_to}</code>\n🔖 Task ID: {tid}\n\n🔗 Link: {link}\n💬 Text: <code>{text}</code>"
+            try: 
+                bot.send_photo(user_id, ss, caption=caption_text, parse_mode="HTML", reply_markup=markup)
+            except: 
+                bot.send_message(user_id, f"⚠️ <b>Screenshot Expired/Error!</b>\n\n{caption_text}", parse_mode="HTML", reply_markup=markup)
         else:
             bot.send_message(user_id, "No pending Map tasks left!", parse_mode="HTML")
 
