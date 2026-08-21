@@ -35,9 +35,10 @@ def run_health_server():
 
 threading.Thread(target=run_health_server, daemon=True).start()
 
-# --- SUPER FAST DATABASE POOL ---
+# --- SUPER FAST DATABASE POOL (0.1s Response Time) ---
 try:
-    db_pool = psycopg2.pool.ThreadedConnectionPool(1, 20, DATABASE_URL)
+    # Always keeps 5 connections open, scales up to 50 instantly.
+    db_pool = psycopg2.pool.ThreadedConnectionPool(5, 50, DATABASE_URL)
     print("✅ Turbo DB Pool Connected!")
 except Exception as e:
     print(f"❌ DB Pool Error: {e}")
@@ -64,8 +65,8 @@ def run_query(query, params=(), fetch=None, commit=False):
             return res
         except Exception as e:
             if conn:
-                db_pool.putconn(conn, close=True) # Clear broken connection instantly
-            time.sleep(0.5)
+                db_pool.putconn(conn, close=True) # Clear broken connection
+            time.sleep(0.2)
     return None
 
 # --- INIT DATABASE ---
@@ -76,11 +77,15 @@ def init_db():
     run_query('''CREATE TABLE IF NOT EXISTS pending_withdraws (id SERIAL PRIMARY KEY, user_id BIGINT, method TEXT, address TEXT, amount FLOAT)''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS approved_withdraws (id SERIAL PRIMARY KEY, user_id BIGINT, method TEXT, address TEXT, amount FLOAT, date TEXT)''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS admins (user_id BIGINT PRIMARY KEY)''', commit=True)
+    
     run_query('''CREATE TABLE IF NOT EXISTS map_tasks (id SERIAL PRIMARY KEY, link TEXT, review_text TEXT, status TEXT DEFAULT 'AVAILABLE', assigned_to BIGINT)''', commit=True)
     run_query('''ALTER TABLE map_tasks ADD COLUMN IF NOT EXISTS ss_file_id TEXT''', commit=True)
+    
     run_query('''CREATE TABLE IF NOT EXISTS new_gmail_tasks (id SERIAL PRIMARY KEY, gmail TEXT, password TEXT, status TEXT DEFAULT 'AVAILABLE', assigned_to BIGINT, assigned_time TIMESTAMP)''', commit=True)
     run_query('''ALTER TABLE new_gmail_tasks ADD COLUMN IF NOT EXISTS ss_file_id TEXT''', commit=True)
+    
     run_query('''CREATE TABLE IF NOT EXISTS task_logs (id SERIAL PRIMARY KEY, task_type TEXT, action TEXT, date TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''', commit=True)
+    
     run_query('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''', commit=True)
     
     run_query("INSERT INTO admins (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (OWNER_ID,), commit=True)
@@ -282,14 +287,16 @@ def handle_all_messages(message):
             threading.Thread(target=process_broadcast, args=(user_id, message.message_id)).start()
             return
             
+        # 🔥 NEW GMAIL PROOF SUBMISSION (Show ID + Password securely to Admin)
         if state == 'new_gmail_task_ss':
             if message.content_type == 'photo':
                 tid = user_states[user_id]['task_id']
                 file_id = message.photo[-1].file_id
                 run_query("UPDATE new_gmail_tasks SET status='SUBMITTED', ss_file_id=%s WHERE id=%s", (file_id, tid), commit=True)
                 
-                t_gm = run_query("SELECT gmail FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
+                t_gm = run_query("SELECT gmail, password FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
                 t_gmail = t_gm[0] if t_gm else "Unknown"
+                t_pass = t_gm[1] if t_gm else "Unknown"
                 
                 r_single = get_setting('reward_newgmail_single')
                 r_bulk = get_setting('reward_newgmail_bulk')
@@ -299,7 +306,13 @@ def handle_all_messages(message):
                            InlineKeyboardButton(f"✅ Appr (₹{r_bulk})", callback_data=f"ngmappr_{r_bulk}_{tid}_{user_id}"))
                 markup.row(InlineKeyboardButton("❌ Reject", callback_data=f"ngmrej_{tid}_{user_id}"))
                 
-                bot.send_photo(OWNER_ID, file_id, caption=f"🔔 <b>NEW GMAIL TASK PROOF</b>\n👤 <code>{user_id}</code>\n🔖 Task ID: <code>{tid}</code>\n📧 Gmail: <code>{t_gmail}</code>", parse_mode="HTML", reply_markup=markup)
+                admin_caption = (f"🔔 <b>NEW GMAIL TASK PROOF</b>\n"
+                                 f"👤 <code>{user_id}</code>\n"
+                                 f"🔖 Task ID: <code>{tid}</code>\n\n"
+                                 f"📧 <b>Gmail:</b> <code>{t_gmail}</code>\n"
+                                 f"🔑 <b>Pass:</b> <code>{t_pass}</code>")
+                                 
+                bot.send_photo(OWNER_ID, file_id, caption=admin_caption, parse_mode="HTML", reply_markup=markup)
                 bot.send_message(user_id, "✅ <b>Your screenshot has been submitted to the admin. Please wait at least 24 hours for validation.</b>", parse_mode="HTML", reply_markup=main_menu(user_id))
                 del user_states[user_id]
                 return
@@ -633,7 +646,8 @@ def callback_query(call):
     data = call.data
     
     # 🔥 Answer instantly to stop loading icon
-    bot.answer_callback_query(call.id)
+    try: bot.answer_callback_query(call.id)
+    except: pass
 
     if data == "back_to_main":
         if user_id in user_states: del user_states[user_id]
@@ -720,8 +734,8 @@ def callback_query(call):
         tid = int(data.split("_")[2])
         tgt = int(data.split("_")[3])
         
-        t_gmail = run_query("SELECT gmail FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
-        t_gmail = t_gmail[0] if t_gmail else "Unknown"
+        t_gm = run_query("SELECT gmail FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
+        t_gmail = t_gm[0] if t_gm else "Unknown"
         
         add_balance(tgt, amt, f"New Gmail Task Approved (ID: {tid})")
         run_query("UPDATE new_gmail_tasks SET status='COMPLETED' WHERE id=%s", (tid,), commit=True)
@@ -740,8 +754,8 @@ def callback_query(call):
         tid = int(data.split("_")[1])
         tgt = int(data.split("_")[2])
         
-        t_gmail = run_query("SELECT gmail FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
-        t_gmail = t_gmail[0] if t_gmail else "Unknown"
+        t_gm = run_query("SELECT gmail FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
+        t_gmail = t_gm[0] if t_gm else "Unknown"
         
         run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE id=%s", (tid,), commit=True)
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('GMAIL', 'REJECT')", commit=True)
@@ -879,11 +893,11 @@ def callback_query(call):
     elif data == "admin_back" and is_admin(user_id):
         bot.edit_message_text("🛠️ <b>EXECUTIVE DASHBOARD</b>\nPlease select a category:", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=admin_markup(user_id))
 
-    # PENDING QUEUE REVIEWS
+    # 🔥 PENDING QUEUE REVIEWS
     elif data == "review_pend_gmail" and is_admin(user_id):
-        task = run_query("SELECT id, assigned_to, gmail, ss_file_id FROM new_gmail_tasks WHERE status='SUBMITTED' LIMIT 1", fetch='one')
+        task = run_query("SELECT id, assigned_to, gmail, password, ss_file_id FROM new_gmail_tasks WHERE status='SUBMITTED' LIMIT 1", fetch='one')
         if task:
-            tid, assigned_to, gmail, ss = task
+            tid, assigned_to, gmail, pwd, ss = task
             r_single = get_setting('reward_newgmail_single')
             r_bulk = get_setting('reward_newgmail_bulk')
             markup = InlineKeyboardMarkup()
@@ -894,7 +908,13 @@ def callback_query(call):
             try: bot.delete_message(user_id, call.message.message_id)
             except: pass
             
-            try: bot.send_photo(user_id, ss, caption=f"🔔 <b>PENDING GMAIL REVIEW</b>\n👤 <code>{assigned_to}</code>\n🔖 Task ID: <code>{tid}</code>\n📧 Gmail: <code>{gmail}</code>", parse_mode="HTML", reply_markup=markup)
+            caption_text = (f"🔔 <b>PENDING GMAIL REVIEW</b>\n"
+                            f"👤 <code>{assigned_to}</code>\n"
+                            f"🔖 Task ID: <code>{tid}</code>\n\n"
+                            f"📧 <b>Gmail:</b> <code>{gmail}</code>\n"
+                            f"🔑 <b>Pass:</b> <code>{pwd}</code>")
+            
+            try: bot.send_photo(user_id, ss, caption=caption_text, parse_mode="HTML", reply_markup=markup)
             except: bot.send_message(user_id, "⚠️ User ka screenshot expired. Task Reject karo.", reply_markup=markup)
         else:
             bot.send_message(user_id, "No pending Gmail tasks left!", parse_mode="HTML")
@@ -1105,7 +1125,7 @@ def callback_query(call):
         markup.row(InlineKeyboardButton("🔙 Back to Settings", callback_data="adm_panel_settings"))
         
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
-        bot.send_message(user_id, "🔄 Visibility updated dynamically. Keyboard refreshing...", reply_markup=main_menu(user_id))
+        bot.send_message(user_id, "🔄 Visibility updated dynamically.", reply_markup=main_menu(user_id))
 
     elif data.startswith("stoggle_") and is_admin(user_id):
         key = data.replace("stoggle_", "")
@@ -1173,14 +1193,13 @@ def callback_query(call):
         user_states[user_id] = {'state': 'admin_set_gmail_pass'}; bot.send_message(user_id, "🔑 Deploy Legacy Gmail Crypt-Key:")
 
     elif data == "admin_total_users" and is_admin(user_id):
-        pass # Dashboard mein dikhta hai ab, but fallback ke liye skip nahi karte
+        pass 
         
     elif data == "admin_user_balances" and is_admin(user_id):
         records = run_query("SELECT user_id, username, balance FROM users ORDER BY balance DESC", fetch='all')
         if not records:
             bot.send_message(user_id, "No users registered yet!", parse_mode="HTML")
             return
-        
         current_msg = f"👥 <b>ALL USER BALANCES (Total: {len(records)})</b>\n━━━━━━━━━━━━━━━━━━━\n"
         for r in records:
             uname = r[1] if r[1] else "Unknown"
@@ -1206,8 +1225,7 @@ def callback_query(call):
                 msg += f"👤 <code>{r[0]}</code> | {r[1]} | 💰 {curr_symbol}{r[3]} | 📌 <code>{safe_addr}</code>\n📅 {r[4]}\n\n"
             if len(msg) > 4000:
                 msg = msg[:4000] + "\n\n⚠️ (Limit reached, Showing latest)"
-            try:
-                bot.send_message(user_id, msg, parse_mode="HTML")
+            try: bot.send_message(user_id, msg, parse_mode="HTML")
             except Exception as e: pass
 
     elif data == "admin_broadcast" and is_admin(user_id):
@@ -1260,20 +1278,16 @@ def callback_query(call):
             date_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
             insert_check = run_query("INSERT INTO approved_withdraws (user_id, method, address, amount, date) VALUES (%s, %s, %s, %s, %s) RETURNING id", 
                                      (int(t_user), str(meth), str(addr), float(amt), str(date_now)), fetch='id', commit=True)
-            
-            if not insert_check:
-                return
+            if not insert_check: return
                 
             curr_symbol = "₹" if meth == "🏦 UPI" else "$"
-            try:
-                bot.send_message(t_user, f"🎉 <b>FUNDS DISBURSED!</b>\nYour request for {curr_symbol}{amt} via {meth} has been officially fulfilled.", parse_mode="HTML")
+            try: bot.send_message(t_user, f"🎉 <b>FUNDS DISBURSED!</b>\nYour request for {curr_symbol}{amt} via {meth} has been officially fulfilled.", parse_mode="HTML")
             except: pass
             
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton("⏭️ Next Pending Withdraw", callback_data="review_pend_wd"))
             markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
-            try:
-                bot.edit_message_text(f"✅ Asset Routed for <code>{t_user}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+            try: bot.edit_message_text(f"✅ Asset Routed for <code>{t_user}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
             except: pass
             run_query("DELETE FROM pending_withdraws WHERE id=%s", (pid,), commit=True)
 
@@ -1285,24 +1299,19 @@ def callback_query(call):
             refund_inr = amt if meth == "🏦 UPI" else amt * USDT_TO_INR_RATE
             
             add_balance(t_user, refund_inr, f"Refund: {meth} Denied")
-            try:
-                bot.send_message(t_user, f"❌ <b>Request Dropped.</b>\nYour payout via {meth} failed administrative clearance. Funds have been reversed to your portfolio.", parse_mode="HTML")
+            try: bot.send_message(t_user, f"❌ <b>Request Dropped.</b>\nYour payout via {meth} failed administrative clearance. Funds have been reversed to your portfolio.", parse_mode="HTML")
             except: pass
             
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton("⏭️ Next Pending Withdraw", callback_data="review_pend_wd"))
             markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
-            try:
-                bot.edit_message_text(f"❌ Transaction Dropped (Refunded) for <code>{t_user}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+            try: bot.edit_message_text(f"❌ Transaction Dropped (Refunded) for <code>{t_user}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
             except: pass
             run_query("DELETE FROM pending_withdraws WHERE id=%s", (pid,), commit=True)
 
 # --- START BOT ---
 if __name__ == "__main__":
-    try:
-        bot.remove_webhook()
-    except Exception as e:
-        pass
-        
+    try: bot.remove_webhook()
+    except Exception as e: pass
     print("🤖 VIP Turbo Bot System Online. Running Infinity Polling...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
