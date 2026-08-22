@@ -93,6 +93,7 @@ def init_db():
         'bot_status': 'ON', 
         'create_gmail_task': 'ON', 'new_gmail_task': 'ON', 'old_gmail_task': 'ON', 'map_review_task': 'ON', 'withdraw': 'ON',
         'vis_create_gmail': 'ON', 'vis_new_gmail': 'ON', 'vis_old_gmail': 'ON', 'vis_map': 'ON', 'vis_withdraw': 'ON',
+        'vis_bulk_gmail': 'ON', 
         'min_upi': '15.0', 'min_usdt': '0.16', 'gmail_password': 'ethicbro999', 
         'reward_gmail': '15.0', 'reward_oldgmail': '15.0', 'reward_map': '10.0',
         'reward_newgmail_single': '20.0', 'reward_newgmail_bulk': '25.0',
@@ -300,6 +301,7 @@ def handle_all_messages(message):
                 r_bulk = get_setting('reward_newgmail_bulk')
                 
                 markup = InlineKeyboardMarkup()
+                markup.row(InlineKeyboardButton("📤 Sended To Buyer", callback_data=f"ngmbuyer_{tid}_{user_id}"))
                 markup.row(InlineKeyboardButton(f"✅ Appr (₹{r_single})", callback_data=f"ngmappr_{r_single}_{tid}_{user_id}"), 
                            InlineKeyboardButton(f"✅ Appr (₹{r_bulk})", callback_data=f"ngmappr_{r_bulk}_{tid}_{user_id}"))
                 markup.row(InlineKeyboardButton("❌ Reject Options", callback_data=f"ngmrej_{tid}_{user_id}"))
@@ -366,10 +368,21 @@ def handle_all_messages(message):
             r_single = get_setting('reward_newgmail_single')
             r_bulk = get_setting('reward_newgmail_bulk')
             
+            # 🔥 BULK UNLOCK LOGIC (Requires 3 SUBMITTED/COMPLETED tasks in last 24h)
+            submitted_count_res = run_query("SELECT count(id) FROM new_gmail_tasks WHERE assigned_to=%s AND status IN ('SUBMITTED', 'COMPLETED') AND assigned_time >= NOW() - INTERVAL '24 hours'", (user_id,), fetch='one')
+            submitted_count = submitted_count_res[0] if submitted_count_res else 0
+            req_tasks = 3
+            
             msg = "📧 <b>SELECT GMAIL TASK TYPE</b>\n\nChoose how many tasks you want to process at once:"
             markup = InlineKeyboardMarkup()
             markup.row(InlineKeyboardButton(f"👤 Single Task (₹{r_single})", callback_data="ngm_type_single"))
-            markup.row(InlineKeyboardButton(f"📚 Bulk Task (₹{r_bulk}/each)", callback_data="ngm_type_bulk"))
+            
+            if get_setting('vis_bulk_gmail') == 'ON':
+                if submitted_count >= req_tasks:
+                    markup.row(InlineKeyboardButton(f"📚 Bulk Task (₹{r_bulk}/each)", callback_data="ngm_type_bulk"))
+                else:
+                    markup.row(InlineKeyboardButton(f"🔒 Bulk Task (Submit {req_tasks - submitted_count} more singles)", callback_data="locked_bulk"))
+                    
             markup.row(InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main"))
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
@@ -657,6 +670,17 @@ def callback_query(call):
         except: pass
         bot.send_message(user_id, "🏠 <b>Main Menu</b>", parse_mode="HTML", reply_markup=main_menu(user_id))
 
+    # 🔥 LOCKED BULK BUTTON LOGIC
+    elif data == "locked_bulk":
+        submitted_count_res = run_query("SELECT count(id) FROM new_gmail_tasks WHERE assigned_to=%s AND status IN ('SUBMITTED', 'COMPLETED') AND assigned_time >= NOW() - INTERVAL '24 hours'", (user_id,), fetch='one')
+        submitted_count = submitted_count_res[0] if submitted_count_res else 0
+        req_tasks = 3
+        rem = req_tasks - submitted_count
+        if rem > 0:
+            bot.answer_callback_query(call.id, f"🔒 Bulk Option Locked!\n\nYou must SUBMIT {rem} more Single Tasks today to unlock Bulk Mode.", show_alert=True)
+        else:
+            bot.answer_callback_query(call.id, "Unlocked! Please click 'Get New Gmail Task' again to refresh.", show_alert=True)
+
     elif data.startswith("ngm_type_"):
         if get_setting('new_gmail_task') == 'OFF' and not is_admin(user_id):
             bot.send_message(user_id, "❌ Bot Option Is Now Closed By Admin", parse_mode="HTML")
@@ -731,6 +755,32 @@ def callback_query(call):
         run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE id=%s", (tid,), commit=True)
         bot.edit_message_text("❌ <b>Task Cancelled.</b> Returned safely to stock.", user_id, call.message.message_id, parse_mode="HTML")
 
+    # 🔥 SENDED TO BUYER LOGIC
+    elif data.startswith("ngmbuyer_"):
+        tid = int(data.split("_")[1])
+        tgt = int(data.split("_")[2])
+        
+        t_gm = run_query("SELECT gmail FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
+        t_gmail = t_gm[0] if t_gm else "Unknown"
+        
+        u_msg = (f"🔔 <b>STATUS UPDATE</b>\n"
+                 f"Your Gmail Address <code>{t_gmail}</code> Has Been Submitted To Buyer.\n"
+                 f"Please wait For Report. Process Time 24Hrs.")
+        try: bot.send_message(tgt, u_msg, parse_mode="HTML")
+        except: pass
+        
+        r_single = get_setting('reward_newgmail_single')
+        r_bulk = get_setting('reward_newgmail_bulk')
+        markup = InlineKeyboardMarkup()
+        markup.row(InlineKeyboardButton(f"✅ Appr (₹{r_single})", callback_data=f"ngmappr_{r_single}_{tid}_{tgt}"), 
+                   InlineKeyboardButton(f"✅ Appr (₹{r_bulk})", callback_data=f"ngmappr_{r_bulk}_{tid}_{tgt}"))
+        markup.row(InlineKeyboardButton("❌ Reject Options", callback_data=f"ngmrej_{tid}_{tgt}"))
+        markup.row(InlineKeyboardButton("⏭️ Next Pending Task", callback_data="review_pend_gmail"))
+        markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+        
+        try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+        except: pass
+
     elif data.startswith("ngmappr_"):
         amt = float(data.split("_")[1])
         tid = int(data.split("_")[2])
@@ -743,7 +793,7 @@ def callback_query(call):
         run_query("UPDATE new_gmail_tasks SET status='COMPLETED' WHERE id=%s", (tid,), commit=True)
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('GMAIL', 'APPROVE')", commit=True)
         
-        try: bot.send_message(tgt, f"🎉 <b>Gmail Task Approved!</b> ₹{amt} added.", parse_mode="HTML")
+        try: bot.send_message(tgt, f"🎉 <b>Gmail Task Approved!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💰 ₹{amt} added.", parse_mode="HTML")
         except: pass
         
         markup = InlineKeyboardMarkup()
@@ -752,7 +802,6 @@ def callback_query(call):
         try: bot.edit_message_caption(f"✅ Approved (₹{amt}) | User: {tgt}\n📧 Gmail: <code>{t_gmail}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
         except: pass
 
-    # 🔥 NEW GMAIL 3 REJECT OPTIONS
     elif data.startswith("ngmrej_"):
         tid = int(data.split("_")[1])
         tgt = int(data.split("_")[2])
@@ -779,7 +828,7 @@ def callback_query(call):
         elif reason_code == "2": r_txt = "Gmail Password Is Wrong Please Don't Send Wrong Gmail Understand"
         else: r_txt = "Gmail Account Is Not Existing Or Suspanded Mail 💌"
         
-        try: bot.send_message(tgt, f"❌ <b>Your Task Rejected:</b>\n{r_txt}", parse_mode="HTML")
+        try: bot.send_message(tgt, f"❌ <b>Your Task Rejected!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: {r_txt}", parse_mode="HTML")
         except: pass
         
         markup = InlineKeyboardMarkup()
@@ -791,7 +840,6 @@ def callback_query(call):
             try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
             except: pass
 
-    # 🔥 CREATE GMAIL 3 REJECT OPTIONS
     elif data.startswith("rejct_"):
         tgt = int(data.split("_")[1])
         markup = InlineKeyboardMarkup()
@@ -809,17 +857,19 @@ def callback_query(call):
         else: r_txt = "Gmail Account Is Not Existing Or Suspanded Mail 💌"
         
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('CREATE_GMAIL', 'REJECT')", commit=True)
-        try: bot.send_message(tgt, f"❌ <b>Your Task Rejected:</b>\n{r_txt}", parse_mode="HTML")
+        
+        t_gmail = "Unknown"
+        if call.message.caption and "📧" in call.message.caption:
+            t_gmail = call.message.caption.split("📧")[1].strip().split("\n")[0]
+            
+        try: bot.send_message(tgt, f"❌ <b>Your Task Rejected!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: {r_txt}", parse_mode="HTML")
         except: pass
         
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
-        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
         except: 
-            try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+            try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
             except: pass
 
-    # 🔥 SELL OLD GMAIL 3 REJECT OPTIONS
     elif data.startswith("oldrej_"):
         tgt = int(data.split("_")[1])
         markup = InlineKeyboardMarkup()
@@ -837,17 +887,19 @@ def callback_query(call):
         else: r_txt = "Gmail Account Is Not Existing Or Suspanded Mail 💌"
         
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('OLD_GMAIL', 'REJECT')", commit=True)
-        try: bot.send_message(tgt, f"❌ <b>Your Task Rejected:</b>\n{r_txt}", parse_mode="HTML")
+        
+        t_gmail = "Unknown"
+        if call.message.caption and "📧" in call.message.caption:
+            t_gmail = call.message.caption.split("📧")[1].strip().split("\n")[0]
+            
+        try: bot.send_message(tgt, f"❌ <b>Your Task Rejected!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: {r_txt}", parse_mode="HTML")
         except: pass
         
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
-        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
         except: 
-            try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+            try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
             except: pass
 
-    # 👉 MAP REVIEW SYSTEM
     elif data == "map_agree":
         if get_setting('map_review_task') == 'OFF' and not is_admin(user_id):
             bot.send_message(user_id, "❌ Bot Option Is Now Closed By Admin", parse_mode="HTML")
@@ -895,6 +947,7 @@ def callback_query(call):
         run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
         bot.edit_message_text("❌ <b>Operation Aborted.</b> The task has been successfully re-queued to the grid.", user_id, call.message.message_id, parse_mode="HTML")
 
+    # 🔥 ADMIN MENUS 
     elif data == "adm_panel_settings" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
         stat = get_setting('bot_status')
@@ -910,7 +963,7 @@ def callback_query(call):
 
     elif data == "adm_panel_gmail" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
-        markup.row(InlineKeyboardButton("➕ Add Single", callback_data="ngm_add_single"), InlineKeyboardButton("📚 Bulk Add", callback_data="ngm_add_bulk"))
+        markup.row(InlineKeyboardButton("➕ Add Single", callback_data="ngm_add_single"), InlineKeyboardButton("📚 Bulk Add (One Password)", callback_data="ngm_add_bulk"))
         markup.row(InlineKeyboardButton("📦 View Current Stock", callback_data="ngm_view_stock"), InlineKeyboardButton("🛠️ Delete Task (ID)", callback_data="ngm_manage_id"))
         markup.row(InlineKeyboardButton("🗑️ Delete ALL Gmails", callback_data="ngm_delete_all"))
         markup.row(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
@@ -980,6 +1033,7 @@ def callback_query(call):
             r_single = get_setting('reward_newgmail_single')
             r_bulk = get_setting('reward_newgmail_bulk')
             markup = InlineKeyboardMarkup()
+            markup.row(InlineKeyboardButton("📤 Sended To Buyer", callback_data=f"ngmbuyer_{tid}_{assigned_to}"))
             markup.row(InlineKeyboardButton(f"✅ Appr (₹{r_single})", callback_data=f"ngmappr_{r_single}_{tid}_{assigned_to}"), InlineKeyboardButton(f"✅ Appr (₹{r_bulk})", callback_data=f"ngmappr_{r_bulk}_{tid}_{assigned_to}"))
             markup.row(InlineKeyboardButton("❌ Reject Options", callback_data=f"ngmrej_{tid}_{assigned_to}"))
             markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
@@ -1177,7 +1231,8 @@ def callback_query(call):
 
     elif data == "admin_vis_toggles" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
-        markup.row(InlineKeyboardButton(f"Vis New Gmail: {'ON 🟢' if get_setting('vis_new_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_new_gmail"))
+        markup.row(InlineKeyboardButton(f"Vis New Gmail: {'ON 🟢' if get_setting('vis_new_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_new_gmail"),
+                   InlineKeyboardButton(f"Vis Bulk N.Gmail: {'ON 🟢' if get_setting('vis_bulk_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_bulk_gmail"))
         markup.row(InlineKeyboardButton(f"Vis Create Gmail: {'ON 🟢' if get_setting('vis_create_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_create_gmail"))
         markup.row(InlineKeyboardButton(f"Vis Old Gmail: {'ON 🟢' if get_setting('vis_old_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_old_gmail"))
         markup.row(InlineKeyboardButton(f"Vis Map Task: {'ON 🟢' if get_setting('vis_map')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_map"))
@@ -1201,7 +1256,8 @@ def callback_query(call):
         update_setting(key, "OFF" if current == "ON" else "ON")
         
         markup = InlineKeyboardMarkup()
-        markup.row(InlineKeyboardButton(f"Vis New Gmail: {'ON 🟢' if get_setting('vis_new_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_new_gmail"))
+        markup.row(InlineKeyboardButton(f"Vis New Gmail: {'ON 🟢' if get_setting('vis_new_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_new_gmail"),
+                   InlineKeyboardButton(f"Vis Bulk N.Gmail: {'ON 🟢' if get_setting('vis_bulk_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_bulk_gmail"))
         markup.row(InlineKeyboardButton(f"Vis Create Gmail: {'ON 🟢' if get_setting('vis_create_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_create_gmail"))
         markup.row(InlineKeyboardButton(f"Vis Old Gmail: {'ON 🟢' if get_setting('vis_old_gmail')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_old_gmail"))
         markup.row(InlineKeyboardButton(f"Vis Map Task: {'ON 🟢' if get_setting('vis_map')=='ON' else 'OFF 🔴'}", callback_data="vtoggle_vis_map"))
@@ -1329,20 +1385,46 @@ def callback_query(call):
         rw = float(get_setting('reward_oldgmail'))
         add_balance(tgt, rw, "Old Gmail Task Approved")
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('OLD_GMAIL', 'APPROVE')", commit=True)
+        
+        t_gmail = "Unknown"
+        if call.message.caption and "📧" in call.message.caption:
+            t_gmail = call.message.caption.split("📧")[1].strip().split("\n")[0]
+            
+        try: bot.send_message(tgt, f"🎉 <b>Validation Complete!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💰 ₹{rw} added for Old Gmail Task.", parse_mode="HTML")
+        except: pass
+        
         try: bot.edit_message_caption(f"✅ Granted (₹{rw}) for {tgt}", call.message.chat.id, call.message.message_id)
         except: bot.edit_message_text(f"✅ Granted (₹{rw}) for {tgt}", call.message.chat.id, call.message.message_id)
-        try: bot.send_message(tgt, f"🎉 <b>Validation Complete!</b>\n₹{rw} added for Old Gmail Task.", parse_mode="HTML")
-        except: pass
 
     elif data.startswith("apprt_") and is_admin(user_id):
         tgt = int(data.split("_")[1])
         rw = float(get_setting('reward_gmail'))
         add_balance(tgt, rw, "Gmail Task Approved")
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('CREATE_GMAIL', 'APPROVE')", commit=True)
+        
+        t_gmail = "Unknown"
+        if call.message.caption and "📧" in call.message.caption:
+            t_gmail = call.message.caption.split("📧")[1].strip().split("\n")[0]
+            
+        try: bot.send_message(tgt, f"🎉 <b>Validation Complete!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💰 ₹{rw} added for Legacy Gmail Task.", parse_mode="HTML")
+        except: pass
+
         try: bot.edit_message_caption(f"✅ Granted (₹{rw}) for {tgt}", call.message.chat.id, call.message.message_id)
         except: bot.edit_message_text(f"✅ Granted (₹{rw}) for {tgt}", call.message.chat.id, call.message.message_id)
-        try: bot.send_message(tgt, f"🎉 <b>Validation Complete!</b>\n₹{rw} added for Legacy Gmail Task.", parse_mode="HTML")
+
+    elif data.startswith("oldrej_") or data.startswith("rejct_"):
+        tgt = int(data.split("_")[1])
+        run_query("INSERT INTO task_logs (task_type, action) VALUES ('GMAIL', 'REJECT')", commit=True)
+        
+        t_gmail = "Unknown"
+        if call.message.caption and "📧" in call.message.caption:
+            t_gmail = call.message.caption.split("📧")[1].strip().split("\n")[0]
+            
+        try: bot.send_message(tgt, f"❌ <b>Your Task Rejected: Gmail Problem.</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>", parse_mode="HTML")
         except: pass
+
+        try: bot.edit_message_caption(f"❌ Denied for {tgt}", call.message.chat.id, call.message.message_id)
+        except: bot.edit_message_text(f"❌ Denied for {tgt}", call.message.chat.id, call.message.message_id)
 
     elif data.startswith("apprw_") and is_admin(user_id): 
         pid = int(data.split("_")[1])
