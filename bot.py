@@ -302,7 +302,7 @@ def handle_all_messages(message):
                 markup = InlineKeyboardMarkup()
                 markup.row(InlineKeyboardButton(f"✅ Appr (₹{r_single})", callback_data=f"ngmappr_{r_single}_{tid}_{user_id}"), 
                            InlineKeyboardButton(f"✅ Appr (₹{r_bulk})", callback_data=f"ngmappr_{r_bulk}_{tid}_{user_id}"))
-                markup.row(InlineKeyboardButton("❌ Reject (Options)", callback_data=f"ngmrej_{tid}_{user_id}"))
+                markup.row(InlineKeyboardButton("❌ Reject Options", callback_data=f"ngmrej_{tid}_{user_id}"))
                 
                 admin_caption = (f"🔔 <b>NEW GMAIL TASK PROOF</b>\n"
                                  f"👤 <code>{user_id}</code>\n"
@@ -323,7 +323,7 @@ def handle_all_messages(message):
                 gmail_name = user_states[user_id]['gmail_name']
                 markup = InlineKeyboardMarkup()
                 markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"apprt_{user_id}"))
-                markup.row(InlineKeyboardButton("❌ Reject (Options)", callback_data=f"rejct_{user_id}"))
+                markup.row(InlineKeyboardButton("❌ Reject Options", callback_data=f"rejct_{user_id}"))
                 bot.send_photo(OWNER_ID, message.photo[-1].file_id, caption=f"🔔 <b>LEGACY GMAIL TASK SUBMISSION</b>\n👤 <code>{user_id}</code>\n📧 <code>{gmail_name}</code>", parse_mode="HTML", reply_markup=markup)
                 bot.send_message(user_id, "✅ <b>Your screenshot has been submitted to the admin. Please wait at least 24 hours for validation.</b>", parse_mode="HTML", reply_markup=main_menu(user_id))
                 del user_states[user_id]
@@ -386,7 +386,6 @@ def handle_all_messages(message):
             markup.add(InlineKeyboardButton("🔙 Return to Main Menu", callback_data="back_to_main"))
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
-        # 🔥 SELL OLD GMAIL TASK (Text Update)
         elif text == "📧 Sell Old Gmail Task":
             if get_setting('old_gmail_task') == 'OFF' and not is_admin(user_id): 
                 bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
@@ -596,7 +595,7 @@ def handle_all_messages(message):
                 bot.send_message(user_id, "✅ <b>Your submission has been safely logged. Please wait at least 24 hours for validation.</b>", parse_mode="HTML", reply_markup=main_menu(user_id))
                 markup = InlineKeyboardMarkup()
                 markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"oldappr_{user_id}"))
-                markup.row(InlineKeyboardButton("❌ Reject (Options)", callback_data=f"oldrej_{user_id}"))
+                markup.row(InlineKeyboardButton("❌ Reject Options", callback_data=f"oldrej_{user_id}"))
                 bot.send_message(OWNER_ID, f"🔔 <b>SELL OLD GMAIL SUBMISSION</b>\n👤 <code>{user_id}</code>\n📧 <code>{state_data['gmail_email']}</code>\n🔑 <code>{text.strip()}</code>", parse_mode="HTML", reply_markup=markup)
                 del user_states[user_id]
 
@@ -786,8 +785,11 @@ def callback_query(call):
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("⏭️ Next Pending Task", callback_data="review_pend_gmail"))
         markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+        
         try: bot.edit_message_caption(f"❌ Rejected (Re-queued) | User: {tgt}\n📧 Gmail: <code>{t_gmail}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
-        except: pass
+        except: 
+            try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+            except: pass
 
     # 🔥 CREATE GMAIL 3 REJECT OPTIONS
     elif data.startswith("rejct_"):
@@ -810,8 +812,12 @@ def callback_query(call):
         try: bot.send_message(tgt, f"❌ <b>Your Task Rejected:</b>\n{r_txt}", parse_mode="HTML")
         except: pass
         
-        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-        except: pass
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        except: 
+            try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+            except: pass
 
     # 🔥 SELL OLD GMAIL 3 REJECT OPTIONS
     elif data.startswith("oldrej_"):
@@ -834,8 +840,12 @@ def callback_query(call):
         try: bot.send_message(tgt, f"❌ <b>Your Task Rejected:</b>\n{r_txt}", parse_mode="HTML")
         except: pass
         
-        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-        except: pass
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        except: 
+            try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
+            except: pass
 
     # 👉 MAP REVIEW SYSTEM
     elif data == "map_agree":
@@ -885,7 +895,6 @@ def callback_query(call):
         run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
         bot.edit_message_text("❌ <b>Operation Aborted.</b> The task has been successfully re-queued to the grid.", user_id, call.message.message_id, parse_mode="HTML")
 
-    # 🔥 ADMIN MENUS
     elif data == "adm_panel_settings" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
         stat = get_setting('bot_status')
@@ -972,7 +981,7 @@ def callback_query(call):
             r_bulk = get_setting('reward_newgmail_bulk')
             markup = InlineKeyboardMarkup()
             markup.row(InlineKeyboardButton(f"✅ Appr (₹{r_single})", callback_data=f"ngmappr_{r_single}_{tid}_{assigned_to}"), InlineKeyboardButton(f"✅ Appr (₹{r_bulk})", callback_data=f"ngmappr_{r_bulk}_{tid}_{assigned_to}"))
-            markup.row(InlineKeyboardButton("❌ Reject (Options)", callback_data=f"ngmrej_{tid}_{assigned_to}"))
+            markup.row(InlineKeyboardButton("❌ Reject Options", callback_data=f"ngmrej_{tid}_{assigned_to}"))
             markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
             
             try: bot.delete_message(user_id, call.message.message_id)
@@ -987,7 +996,7 @@ def callback_query(call):
             try: 
                 bot.send_photo(user_id, ss, caption=caption_text, parse_mode="HTML", reply_markup=markup)
             except: 
-                bot.send_message(user_id, f"⚠️ <b>Screenshot Expired!</b>\n\n{caption_text}", parse_mode="HTML", reply_markup=markup)
+                bot.send_message(user_id, f"⚠️ <b>Screenshot Expired/Error!</b>\n\n{caption_text}", parse_mode="HTML", reply_markup=markup)
         else:
             bot.send_message(user_id, "No pending Gmail tasks left!", parse_mode="HTML")
             
