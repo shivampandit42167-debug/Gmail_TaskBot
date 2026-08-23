@@ -24,6 +24,13 @@ USDT_TO_INR_RATE = 94.0
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
+# 🔥 ANTI-SPAM THREAD LOCKS (To prevent double-clicking bugs)
+user_locks = {}
+def get_user_lock(user_id):
+    if user_id not in user_locks:
+        user_locks[user_id] = threading.Lock()
+    return user_locks[user_id]
+
 # --- ANTI-CRASH RAILWAY HEALTH SERVER ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -102,7 +109,6 @@ def init_db():
         'warning_photo': 'none',
         'alert_photo_gmail': 'none', 'alert_text_gmail': '🚀 Hurry up! New Gmail tasks are available in the bot.',
         'alert_photo_map': 'none', 'alert_text_map': '🚀 Hurry up! New Map Review tasks are available in the bot.',
-        # 🔥 RECOVERY MAIL SETTINGS
         'recovery_email': 'your_recovery_mail@gmail.com',
         'recovery_pass': 'your_app_password_here'
     }
@@ -120,7 +126,6 @@ def get_latest_google_otp():
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(user, password)
         mail.select("inbox")
-        # Search for verification emails from Google
         status, messages = mail.search(None, '(FROM "google.com")')
         if status == "OK" and messages[0]:
             email_ids = messages[0].split()
@@ -133,11 +138,9 @@ def get_latest_google_otp():
                     if isinstance(subject, bytes):
                         subject = subject.decode(encoding if encoding else "utf-8")
                     
-                    # 1. Try to find 6 digit code in Subject
                     match = re.search(r'\b\d{6}\b', subject)
                     if match: return match.group(0)
                     
-                    # 2. Try to find 6 digit code in Body
                     if msg.is_multipart():
                         for part in msg.walk():
                             if part.get_content_type() == "text/plain":
@@ -431,7 +434,6 @@ def handle_all_messages(message):
             r_single = get_setting('reward_newgmail_single')
             r_bulk = get_setting('reward_newgmail_bulk')
             
-            # 🔥 BULK UNLOCK LOGIC
             submitted_count_res = run_query("SELECT count(id) FROM new_gmail_tasks WHERE assigned_to=%s AND status IN ('SUBMITTED', 'COMPLETED') AND assigned_time >= NOW() - INTERVAL '24 hours'", (user_id,), fetch='one')
             submitted_count = submitted_count_res[0] if submitted_count_res else 0
             req_tasks = 3
@@ -486,7 +488,6 @@ def handle_all_messages(message):
             markup.add(InlineKeyboardButton("🔙 Return to Main Menu", callback_data="back_to_main"))
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
-        # 🔥 BET AND EARN FEATURE
         elif text == "🎲 Bet And Earn":
             if get_setting('vis_bet') == 'OFF' and not is_admin(user_id): 
                 bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
@@ -765,7 +766,6 @@ def callback_query(call):
     try: bot.answer_callback_query(call.id)
     except: pass
 
-    # 🔥 BETTING LOGIC CALLBACKS
     if data.startswith("betplay_"):
         if user_id not in user_states or user_states[user_id].get('state') != 'wait_bet_side':
             bot.edit_message_text("❌ Action Expired.", user_id, call.message.message_id)
@@ -847,44 +847,50 @@ def callback_query(call):
         else:
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
+    # 🔥 SPAM-PROOF GMAIL ASSIGNMENT
     elif data.startswith("ngm_go_"):
-        mode = data.split("_")[2]
-        free_expired_gmail_tasks()
-        
-        pend_chk = run_query("SELECT count(id) FROM new_gmail_tasks WHERE assigned_to=%s AND status='PENDING'", (user_id,), fetch='one')[0]
-        if pend_chk > 0:
-            bot.send_message(user_id, f"⚠️ Aapke paas pehle se pending tasks hain! Unhe submit ya cancel karein.", parse_mode="HTML")
-            return
-
-        limit = 1 if mode == "single" else 10
-        tasks = run_query(f'''
-            UPDATE new_gmail_tasks SET status='PENDING', assigned_to=%s, assigned_time=NOW() 
-            WHERE id IN (SELECT id FROM new_gmail_tasks WHERE status='AVAILABLE' LIMIT {limit} FOR UPDATE SKIP LOCKED) 
-            RETURNING id, gmail, password
-        ''', (user_id,), fetch='all', commit=True)
-        
-        if not tasks:
-            bot.send_message(user_id, "🚫 Stock is currently empty! Try again later.", parse_mode="HTML")
-            return
+        with get_user_lock(user_id):
+            mode = data.split("_")[2]
+            free_expired_gmail_tasks()
             
-        try: bot.delete_message(user_id, call.message.message_id)
-        except: pass
-        
-        bot.send_message(user_id, f"🎉 <b>Tasks Allocated!</b>\n\nEk baar me sirf utne hi tasks mile hain jitne stock me the (Max {limit}).", parse_mode="HTML")
-        
-        for t in tasks:
-            tid, t_gmail, t_pass = t
-            msg = (f"📧 <b>GMAIL TASK DETAILS</b>\n━━━━━━━━━━━━━━━━━━━\n\n"
-                   f"<b>Gmail Name:</b> <code>{t_gmail}</code>\n"
-                   f"<b>Password:</b> <code>{t_pass}</code>\n\n"
-                   f"⏳ <b>Time Limit</b> ➔ 15 Minutes\n\n"
-                   f"<i>Jab account create ho jaye toh 'Done' par click karein.</i>")
-            markup = InlineKeyboardMarkup()
-            # 🔥 NEW: "Done" button before OTP flow
-            markup.row(InlineKeyboardButton("✅ Done (Add Recovery)", callback_data=f"ngmdone_{tid}"), InlineKeyboardButton("❌ Cancel Task", callback_data=f"ngm_cancel_{tid}"))
-            bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
+            pend_chk = run_query("SELECT count(id) FROM new_gmail_tasks WHERE assigned_to=%s AND status='PENDING'", (user_id,), fetch='one')[0]
+            if pend_chk > 0:
+                bot.send_message(user_id, f"⚠️ Aapke paas pehle se pending tasks hain! Unhe submit ya cancel karein.", parse_mode="HTML")
+                return
 
-    # 🔥 NEW: DONE BUTTON CLICKED -> SHOW RECOVERY EMAIL TO ADD
+            limit = 1 if mode == "single" else 10
+            tasks = run_query(f'''
+                UPDATE new_gmail_tasks SET status='PENDING', assigned_to=%s, assigned_time=NOW() 
+                WHERE id IN (
+                    SELECT id FROM new_gmail_tasks 
+                    WHERE status='AVAILABLE' 
+                    ORDER BY id ASC 
+                    LIMIT {limit} 
+                    FOR UPDATE SKIP LOCKED
+                ) 
+                RETURNING id, gmail, password
+            ''', (user_id,), fetch='all', commit=True)
+            
+            if not tasks:
+                bot.send_message(user_id, "🚫 Stock is currently empty! Try again later.", parse_mode="HTML")
+                return
+                
+            try: bot.delete_message(user_id, call.message.message_id)
+            except: pass
+            
+            bot.send_message(user_id, f"🎉 <b>Tasks Allocated!</b>\n\nEk baar me sirf utne hi tasks mile hain jitne stock me the (Max {limit}).", parse_mode="HTML")
+            
+            for t in tasks:
+                tid, t_gmail, t_pass = t
+                msg = (f"📧 <b>GMAIL TASK DETAILS</b>\n━━━━━━━━━━━━━━━━━━━\n\n"
+                       f"<b>Gmail Name:</b> <code>{t_gmail}</code>\n"
+                       f"<b>Password:</b> <code>{t_pass}</code>\n\n"
+                       f"⏳ <b>Time Limit</b> ➔ 15 Minutes\n\n"
+                       f"<i>Jab account create ho jaye toh 'Done' par click karein.</i>")
+                markup = InlineKeyboardMarkup()
+                markup.row(InlineKeyboardButton("✅ Done (Add Recovery)", callback_data=f"ngmdone_{tid}"), InlineKeyboardButton("❌ Cancel Task", callback_data=f"ngm_cancel_{tid}"))
+                bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
+
     elif data.startswith("ngmdone_"):
         tid = int(data.split("_")[1])
         rec_email = get_setting('recovery_email')
@@ -901,11 +907,8 @@ def callback_query(call):
         try: bot.edit_message_text(msg, user_id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
         except: pass
 
-    # 🔥 NEW: GET OTP CLICKED -> IMAP FETCH
     elif data.startswith("ngmotp_"):
         tid = int(data.split("_")[1])
-        bot.answer_callback_query(call.id, "Searching Inbox for OTP... Please wait.")
-        
         otp_code = get_latest_google_otp()
         
         if otp_code:
@@ -931,7 +934,6 @@ def callback_query(call):
         run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE id=%s", (tid,), commit=True)
         bot.edit_message_text("❌ <b>Task Cancelled.</b> Returned safely to stock.", user_id, call.message.message_id, parse_mode="HTML")
 
-    # 🔥 SENDED TO BUYER LOGIC
     elif data.startswith("ngmbuyer_"):
         tid = int(data.split("_")[1])
         tgt = int(data.split("_")[2])
@@ -978,7 +980,6 @@ def callback_query(call):
         try: bot.edit_message_caption(f"✅ Approved (₹{amt}) | User: {tgt}\n📧 Gmail: <code>{t_gmail}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
         except: pass
 
-    # 🔥 4 REJECT OPTIONS
     elif data.startswith("ngmrej_"):
         tid = int(data.split("_")[1])
         tgt = int(data.split("_")[2])
@@ -1101,41 +1102,43 @@ def callback_query(call):
             try: bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
             except: pass
 
+    # 👉 MAP REVIEW SYSTEM
     elif data == "map_agree":
-        if get_setting('map_review_task') == 'OFF' and not is_admin(user_id):
-            bot.send_message(user_id, "❌ Bot Option Is Now Closed By Admin", parse_mode="HTML")
-            return
-        
-        chk = run_query("SELECT id, link, review_text FROM map_tasks WHERE assigned_to=%s AND status='PENDING'", (user_id,), fetch='one')
-        if chk:
-            t_id, t_link, t_txt = chk
-            msg = f"⚠️ <b>Action Blocked</b>\nYou currently hold an active unresolved assignment:\n\n🔗 <b>Assigned Resource:</b>\n{t_link}\n\n💬 <b>Required Transcript:</b>\n<code>{t_txt}</code>"
-            markup = InlineKeyboardMarkup()
-            markup.row(InlineKeyboardButton("✅ Mark Completed", callback_data=f"mapdone_{t_id}"), InlineKeyboardButton("❌ Cancel", callback_data=f"mapcancel_{t_id}"))
-            bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
-            return
+        with get_user_lock(user_id):
+            if get_setting('map_review_task') == 'OFF' and not is_admin(user_id):
+                bot.send_message(user_id, "❌ Bot Option Is Now Closed By Admin", parse_mode="HTML")
+                return
+            
+            chk = run_query("SELECT id, link, review_text FROM map_tasks WHERE assigned_to=%s AND status='PENDING'", (user_id,), fetch='one')
+            if chk:
+                t_id, t_link, t_txt = chk
+                msg = f"⚠️ <b>Action Blocked</b>\nYou currently hold an active unresolved assignment:\n\n🔗 <b>Assigned Resource:</b>\n{t_link}\n\n💬 <b>Required Transcript:</b>\n<code>{t_txt}</code>"
+                markup = InlineKeyboardMarkup()
+                markup.row(InlineKeyboardButton("✅ Mark Completed", callback_data=f"mapdone_{t_id}"), InlineKeyboardButton("❌ Cancel", callback_data=f"mapcancel_{t_id}"))
+                bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
+                return
 
-        task = run_query('''
-            UPDATE map_tasks SET status='PENDING', assigned_to=%s 
-            WHERE id = (
-                SELECT id FROM map_tasks 
-                WHERE status='AVAILABLE' 
-                AND review_text NOT IN (SELECT review_text FROM map_tasks WHERE assigned_to=%s AND status='COMPLETED') 
-                LIMIT 1 FOR UPDATE SKIP LOCKED
-            ) 
-            RETURNING id, link, review_text
-        ''', (user_id, user_id), fetch='one', commit=True)
-        
-        if not task:
-            bot.send_message(user_id, "🚫 We are currently out of Unique Review Tasks for you!", parse_mode="HTML")
-        else:
-            t_id, t_link, t_txt = task
-            msg = f"🎉 <b>Asset Allocated!</b>\n\n🔗 <b>Target Directory:</b>\n{t_link}\n\n💬 <b>Required Publish Data:</b>\n<code>{t_txt}</code>\n\n👉 <i>Select 'Completed' upon successful execution.</i>"
-            markup = InlineKeyboardMarkup()
-            markup.row(InlineKeyboardButton("✅ Mark Completed", callback_data=f"mapdone_{t_id}"), InlineKeyboardButton("❌ Cancel", callback_data=f"mapcancel_{t_id}"))
-            try: bot.delete_message(user_id, call.message.message_id)
-            except: pass
-            bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
+            task = run_query('''
+                UPDATE map_tasks SET status='PENDING', assigned_to=%s 
+                WHERE id = (
+                    SELECT id FROM map_tasks 
+                    WHERE status='AVAILABLE' 
+                    ORDER BY id ASC
+                    LIMIT 1 FOR UPDATE SKIP LOCKED
+                ) 
+                RETURNING id, link, review_text
+            ''', (user_id, user_id), fetch='one', commit=True)
+            
+            if not task:
+                bot.send_message(user_id, "🚫 We are currently out of Unique Review Tasks for you!", parse_mode="HTML")
+            else:
+                t_id, t_link, t_txt = task
+                msg = f"🎉 <b>Asset Allocated!</b>\n\n🔗 <b>Target Directory:</b>\n{t_link}\n\n💬 <b>Required Publish Data:</b>\n<code>{t_txt}</code>\n\n👉 <i>Select 'Completed' upon successful execution.</i>"
+                markup = InlineKeyboardMarkup()
+                markup.row(InlineKeyboardButton("✅ Mark Completed", callback_data=f"mapdone_{t_id}"), InlineKeyboardButton("❌ Cancel", callback_data=f"mapcancel_{t_id}"))
+                try: bot.delete_message(user_id, call.message.message_id)
+                except: pass
+                bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
     elif data.startswith("mapdone_"):
         t_id = data.split("_")[1]
@@ -1148,7 +1151,6 @@ def callback_query(call):
         run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
         bot.edit_message_text("❌ <b>Operation Aborted.</b> The task has been successfully re-queued to the grid.", user_id, call.message.message_id, parse_mode="HTML")
 
-    # 🔥 ADMIN MENUS 
     elif data == "adm_panel_settings" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
         stat = get_setting('bot_status')
@@ -1669,5 +1671,5 @@ def callback_query(call):
 if __name__ == "__main__":
     try: bot.remove_webhook()
     except Exception as e: pass
-    print("🤖 VIP Boss System Online. Running Infinity Polling...")
+    print("🤖 Anti-Spam VIP System Online. Running Infinity Polling...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
