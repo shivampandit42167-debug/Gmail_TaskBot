@@ -24,7 +24,7 @@ USDT_TO_INR_RATE = 94.0
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
-# 🔥 ANTI-SPAM THREAD LOCKS (To prevent double-clicking bugs)
+# 🔥 ANTI-SPAM THREAD LOCKS
 user_locks = {}
 def get_user_lock(user_id):
     if user_id not in user_locks:
@@ -117,11 +117,11 @@ def init_db():
 
 init_db()
 
-# --- AUTOMATIC GOOGLE OTP FETCHER ---
-def get_latest_google_otp():
+# --- STRICT OTP FETCHER (MATCHES GMAIL ID) ---
+def get_latest_google_otp(target_gmail):
     user = get_setting('recovery_email')
     password = get_setting('recovery_pass')
-    if user == 'your_recovery_mail@gmail.com': return None
+    if user == 'your_recovery_mail@gmail.com' or not target_gmail: return None
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(user, password)
@@ -129,28 +129,31 @@ def get_latest_google_otp():
         status, messages = mail.search(None, '(FROM "google.com")')
         if status == "OK" and messages[0]:
             email_ids = messages[0].split()
-            latest_id = email_ids[-1]
-            status, msg_data = mail.fetch(latest_id, "(RFC822)")
-            for response_part in msg_data:
-                if isinstance(response_part, tuple):
-                    msg = email.message_from_bytes(response_part[1])
-                    subject, encoding = decode_header(msg["Subject"])[0]
-                    if isinstance(subject, bytes):
-                        subject = subject.decode(encoding if encoding else "utf-8")
-                    
-                    match = re.search(r'\b\d{6}\b', subject)
-                    if match: return match.group(0)
-                    
-                    if msg.is_multipart():
-                        for part in msg.walk():
-                            if part.get_content_type() == "text/plain":
-                                body = part.get_payload(decode=True).decode()
-                                match = re.search(r'\b\d{6}\b', body)
-                                if match: return match.group(0)
-                    else:
-                        body = msg.get_payload(decode=True).decode()
-                        match = re.search(r'\b\d{6}\b', body)
-                        if match: return match.group(0)
+            # Last 5 emails check karte hain taaki delay hone par bhi match ho jaye
+            for e_id in reversed(email_ids[-5:]):
+                status, msg_data = mail.fetch(e_id, "(RFC822)")
+                for response_part in msg_data:
+                    if isinstance(response_part, tuple):
+                        msg = email.message_from_bytes(response_part[1])
+                        full_text = ""
+                        
+                        subject, encoding = decode_header(msg["Subject"])[0]
+                        if isinstance(subject, bytes):
+                            subject = subject.decode(encoding if encoding else "utf-8", errors="ignore")
+                        full_text += subject + " "
+                        
+                        if msg.is_multipart():
+                            for part in msg.walk():
+                                if part.get_content_type() == "text/plain":
+                                    full_text += part.get_payload(decode=True).decode(errors="ignore") + " "
+                        else:
+                            full_text += msg.get_payload(decode=True).decode(errors="ignore") + " "
+                            
+                        target_local = target_gmail.split('@')[0].lower()
+                        # Strict match: Email ID verify karo
+                        if target_local in full_text.lower() or target_gmail.lower() in full_text.lower():
+                            match = re.search(r'\b\d{6}\b', full_text)
+                            if match: return match.group(0)
         return None
     except Exception as e:
         print("IMAP Error:", e)
@@ -847,7 +850,6 @@ def callback_query(call):
         else:
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
-    # 🔥 SPAM-PROOF GMAIL ALLOCATION (LOCK SYSTEM APPLIED)
     elif data.startswith("ngm_go_"):
         with get_user_lock(user_id):
             mode = data.split("_")[2]
@@ -911,7 +913,10 @@ def callback_query(call):
         tid = int(data.split("_")[1])
         bot.answer_callback_query(call.id, "Searching Inbox for OTP... Please wait.")
         
-        otp_code = get_latest_google_otp()
+        t_gm = run_query("SELECT gmail FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
+        target_gmail = t_gm[0] if t_gm else ""
+        
+        otp_code = get_latest_google_otp(target_gmail)
         
         if otp_code:
             msg = (f"🎉 <b>OTP RECEIVED SUCCESSFULLY!</b>\n━━━━━━━━━━━━━━━━━━━\n\n"
@@ -1018,7 +1023,9 @@ def callback_query(call):
         markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
         
         try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> {t_gmail}\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
-        except: bot.edit_message_text(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> {t_gmail}\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        except: 
+            try: bot.edit_message_text(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> {t_gmail}\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+            except: pass
 
     elif data.startswith("oldbuyer_"):
         tgt = int(data.split("_")[1])
@@ -1065,8 +1072,8 @@ def callback_query(call):
         try: bot.send_message(tgt, f"❌ <b>Your Task Rejected!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: {r_txt}", parse_mode="HTML")
         except: pass
         
-        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> {t_gmail}\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-        except: bot.edit_message_text(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> {t_gmail}\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        except: bot.edit_message_text(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
     elif data.startswith("oldrej_"):
         tgt = int(data.split("_")[1])
@@ -1095,8 +1102,8 @@ def callback_query(call):
         try: bot.send_message(tgt, f"❌ <b>Your Task Rejected!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: {r_txt}", parse_mode="HTML")
         except: pass
         
-        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> {t_gmail}\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-        except: bot.edit_message_text(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> {t_gmail}\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        except: bot.edit_message_text(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
     elif data == "map_agree":
         with get_user_lock(user_id):
@@ -1231,6 +1238,67 @@ def callback_query(call):
 
     elif data == "admin_back" and is_admin(user_id):
         bot.edit_message_text("🛠️ <b>EXECUTIVE DASHBOARD</b>\nPlease select a category:", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=admin_markup(user_id))
+
+    # PENDING QUEUE REVIEWS
+    elif data == "review_pend_gmail" and is_admin(user_id):
+        task = run_query("SELECT id, assigned_to, gmail, password, ss_file_id FROM new_gmail_tasks WHERE status='SUBMITTED' LIMIT 1", fetch='one')
+        if task:
+            tid, assigned_to, gmail, pwd, ss = task
+            r_single = get_setting('reward_newgmail_single')
+            r_bulk = get_setting('reward_newgmail_bulk')
+            markup = InlineKeyboardMarkup()
+            markup.row(InlineKeyboardButton("📤 Sended To Buyer", callback_data=f"ngmbuyer_{tid}_{assigned_to}"))
+            markup.row(InlineKeyboardButton(f"✅ Appr (₹{r_single})", callback_data=f"ngmappr_{r_single}_{tid}_{assigned_to}"), InlineKeyboardButton(f"✅ Appr (₹{r_bulk})", callback_data=f"ngmappr_{r_bulk}_{tid}_{assigned_to}"))
+            markup.row(InlineKeyboardButton("❌ Reject Options", callback_data=f"ngmrej_{tid}_{assigned_to}"))
+            markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+            
+            try: bot.delete_message(user_id, call.message.message_id)
+            except: pass
+            
+            caption_text = (f"🔔 <b>PENDING GMAIL REVIEW</b>\n"
+                            f"👤 <code>{assigned_to}</code>\n"
+                            f"🔖 Task ID: <code>{tid}</code>\n\n"
+                            f"📧 <b>Gmail:</b> <code>{gmail}</code>\n"
+                            f"🔑 <b>Pass:</b> <code>{pwd}</code>")
+            
+            try: 
+                bot.send_photo(user_id, ss, caption=caption_text, parse_mode="HTML", reply_markup=markup)
+            except: 
+                bot.send_message(user_id, f"⚠️ <b>Screenshot Expired/Error!</b>\n\n{caption_text}", parse_mode="HTML", reply_markup=markup)
+        else:
+            bot.send_message(user_id, "No pending Gmail tasks left!", parse_mode="HTML")
+            
+    elif data == "review_pend_map" and is_admin(user_id):
+        task = run_query("SELECT id, assigned_to, link, review_text, ss_file_id FROM map_tasks WHERE status='SUBMITTED' LIMIT 1", fetch='one')
+        if task:
+            tid, assigned_to, link, text, ss = task
+            markup = InlineKeyboardMarkup()
+            markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"mappr_{assigned_to}_{tid}"), InlineKeyboardButton("❌ Reject", callback_data=f"mrej_{assigned_to}_{tid}"))
+            markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+            
+            try: bot.delete_message(user_id, call.message.message_id)
+            except: pass
+            
+            caption_text = f"🗺️ <b>PENDING MAP REVIEW</b>\n👤 <code>{assigned_to}</code>\n🔖 Task ID: {tid}\n\n🔗 Link: {link}\n💬 Text: <code>{text}</code>"
+            try: 
+                bot.send_photo(user_id, ss, caption=caption_text, parse_mode="HTML", reply_markup=markup)
+            except: 
+                bot.send_message(user_id, f"⚠️ <b>Screenshot Expired!</b>\n\n{caption_text}", parse_mode="HTML", reply_markup=markup)
+        else:
+            bot.send_message(user_id, "No pending Map tasks left!", parse_mode="HTML")
+
+    elif data == "review_pend_wd" and is_admin(user_id):
+        req = run_query("SELECT id, user_id, method, address, amount FROM pending_withdraws LIMIT 1", fetch='one')
+        if req:
+            pid, u_id, meth, addr, amt = req
+            markup = InlineKeyboardMarkup()
+            markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"apprw_{pid}"), InlineKeyboardButton("❌ Reject", callback_data=f"rejcc_{pid}"))
+            markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+            try: bot.delete_message(user_id, call.message.message_id)
+            except: pass
+            bot.send_message(user_id, f"🔔 <b>PENDING WITHDRAWAL</b>\n👤 <code>{u_id}</code>\n🏦 {meth}\n💰 {amt}\n📌 <code>{addr}</code>", parse_mode="HTML", reply_markup=markup)
+        else:
+            bot.send_message(user_id, "No pending withdrawals left!", parse_mode="HTML")
 
     elif data == "ngm_delete_all" and is_admin(user_id):
         run_query("DELETE FROM new_gmail_tasks", commit=True)
@@ -1449,21 +1517,85 @@ def callback_query(call):
         
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
 
-    elif data.startswith("oldappr_") and is_admin(user_id):
-        tgt = int(data.split("_")[1])
-        rw = float(get_setting('reward_oldgmail'))
-        add_balance(tgt, rw, "Old Gmail Task Approved")
-        run_query("INSERT INTO task_logs (task_type, action) VALUES ('OLD_GMAIL', 'APPROVE')", commit=True)
+    elif data == "admin_set_warning_photo" and is_admin(user_id):
+        user_states[user_id] = {'state': 'admin_wait_warning_photo'}
+        bot.send_message(user_id, "🖼️ <b>WARNING PHOTO SETUP</b>\n\nKripya wo <b>Photo</b> bhejein jo users ko 'Get New Gmail Task' click karne par rules ke sath dikhegi.\n\n<i>Note: Sirf photo bhejein, text ki zaroorat nahi hai. Agar hatana ho toh koi bhi text bhej de.</i>", parse_mode="HTML")
+
+    elif data == "admin_set_auto_alert" and is_admin(user_id):
+        markup = InlineKeyboardMarkup()
+        markup.row(InlineKeyboardButton("📧 Set Gmail Alert Photo/Text", callback_data="set_alert_gmail"))
+        markup.row(InlineKeyboardButton("🗺️ Set Map Alert Photo/Text", callback_data="set_alert_map"))
+        markup.row(InlineKeyboardButton("🔙 Back to Settings", callback_data="adm_panel_settings"))
+        bot.edit_message_text("📢 <b>AUTO-ALERT SETUP</b>\nSelect which task's automated broadcast you want to configure:", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+
+    elif data == "set_alert_gmail" and is_admin(user_id):
+        user_states[user_id] = {'state': 'admin_wait_alert_gmail'}
+        bot.send_message(user_id, "📧 <b>GMAIL ALERT SETUP</b>\n\nSend a <b>Photo with Caption (Text)</b> that will be broadcasted automatically to all users whenever you add New Gmail Tasks.\n\n<i>Note: If you only want text, just send the text.</i>", parse_mode="HTML")
+
+    elif data == "set_alert_map" and is_admin(user_id):
+        user_states[user_id] = {'state': 'admin_wait_alert_map'}
+        bot.send_message(user_id, "🗺️ <b>MAP ALERT SETUP</b>\n\nSend a <b>Photo with Caption (Text)</b> that will be broadcasted automatically to all users whenever you add New Map Tasks.\n\n<i>Note: If you only want text, just send the text.</i>", parse_mode="HTML")
+
+    elif data == "admin_set_min" and is_admin(user_id):
+        markup = InlineKeyboardMarkup()
+        markup.row(InlineKeyboardButton("Set Threshold UPI (₹)", callback_data="set_min_upi"), InlineKeyboardButton("Set Threshold USDT ($)", callback_data="set_min_usdt"))
+        markup.row(InlineKeyboardButton("🔙 Back to Settings", callback_data="adm_panel_settings"))
+        bot.edit_message_text("⚙️ <b>WITHDRAWAL RESTRICTIONS</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+    
+    elif data == "set_min_upi" and is_admin(user_id):
+        user_states[user_id] = {'state': 'admin_set_min_upi'}; bot.send_message(user_id, "📝 Transmit UPI Floor (₹):")
+    elif data == "set_min_usdt" and is_admin(user_id):
+        user_states[user_id] = {'state': 'admin_set_min_usdt'}; bot.send_message(user_id, "📝 Transmit USDT Floor ($):")
+    elif data == "admin_set_pass" and is_admin(user_id):
+        user_states[user_id] = {'state': 'admin_set_gmail_pass'}; bot.send_message(user_id, "🔑 Deploy Legacy Gmail Crypt-Key:")
+
+    elif data == "admin_total_users" and is_admin(user_id):
+        pass 
         
-        t_gmail = "Unknown"
-        if call.message.caption and "📧" in call.message.caption:
-            t_gmail = call.message.caption.split("📧")[1].strip().split("\n")[0]
-            
-        try: bot.send_message(tgt, f"🎉 <b>Validation Complete!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💰 ₹{rw} added for Old Gmail Task.", parse_mode="HTML")
-        except: pass
-        
-        try: bot.edit_message_caption(f"✅ Granted (₹{rw}) for {tgt}\n📧 <b>Gmail:</b> {t_gmail}", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-        except: bot.edit_message_text(f"✅ Granted (₹{rw}) for {tgt}\n📧 <b>Gmail:</b> {t_gmail}", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+    elif data == "admin_user_balances" and is_admin(user_id):
+        records = run_query("SELECT user_id, username, balance FROM users ORDER BY balance DESC", fetch='all')
+        if not records:
+            bot.send_message(user_id, "No users registered yet!", parse_mode="HTML")
+            return
+        current_msg = f"👥 <b>ALL USER BALANCES (Total: {len(records)})</b>\n━━━━━━━━━━━━━━━━━━━\n"
+        for r in records:
+            uname = r[1] if r[1] else "Unknown"
+            line = f"👤 {uname} | <code>{r[0]}</code> | 💰 ₹{r[2]:.2f}\n"
+            if len(current_msg) + len(line) > 3900:
+                bot.send_message(call.message.chat.id, current_msg, parse_mode="HTML")
+                current_msg = "👥 <b>ALL USER BALANCES (Contd.)</b>\n━━━━━━━━━━━━━━━━━━━\n" + line
+            else:
+                current_msg += line
+        if current_msg:
+            markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back to Settings", callback_data="adm_panel_settings"))
+            bot.send_message(call.message.chat.id, current_msg, parse_mode="HTML", reply_markup=markup)
+    
+    elif data == "admin_approved_list" and is_admin(user_id):
+        records = run_query("SELECT user_id, method, address, amount, date FROM approved_withdraws ORDER BY id DESC LIMIT 15", fetch='all')
+        if not records:
+            bot.send_message(user_id, "No approved withdraw history yet!", parse_mode="HTML")
+        else:
+            msg = "📜 <b>APPROVED WITHDRAWALS HISTORY:</b>\n\n"
+            for r in records:
+                curr_symbol = "₹" if r[1] == "🏦 UPI" else "$"
+                safe_addr = str(r[2]).replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;")
+                msg += f"👤 <code>{r[0]}</code> | {r[1]} | 💰 {curr_symbol}{r[3]} | 📌 <code>{safe_addr}</code>\n📅 {r[4]}\n\n"
+            if len(msg) > 4000:
+                msg = msg[:4000] + "\n\n⚠️ (Limit reached, Showing latest)"
+            try: bot.send_message(user_id, msg, parse_mode="HTML")
+            except Exception as e: pass
+
+    elif data == "admin_broadcast" and is_admin(user_id):
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
+        bot.send_message(user_id, "📢 <b>BROADCAST MODE</b>\n\nJo message sabko bhejna hai, wo bhejein (Text, Photo with Caption, Video etc):", parse_mode="HTML", reply_markup=markup)
+        user_states[user_id] = {'state': 'admin_wait_broadcast'}
+
+    elif data == "admin_addbal" and is_admin(user_id):
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
+        bot.send_message(user_id, "💸 <b>ADD BALANCE MODE</b>\n\n👉 User ka <b>Telegram ID</b> bhejein:", parse_mode="HTML", reply_markup=markup)
+        user_states[user_id] = {'state': 'admin_wait_uid'}
 
     elif data.startswith("apprt_") and is_admin(user_id):
         tgt = int(data.split("_")[1])
@@ -1478,8 +1610,8 @@ def callback_query(call):
         try: bot.send_message(tgt, f"🎉 <b>Validation Complete!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💰 ₹{rw} added for Legacy Gmail Task.", parse_mode="HTML")
         except: pass
 
-        try: bot.edit_message_caption(f"✅ Granted (₹{rw}) for {tgt}\n📧 <b>Gmail:</b> {t_gmail}", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-        except: bot.edit_message_text(f"✅ Granted (₹{rw}) for {tgt}\n📧 <b>Gmail:</b> {t_gmail}", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        try: bot.edit_message_caption(f"✅ Granted (₹{rw}) for {tgt}", call.message.chat.id, call.message.message_id)
+        except: bot.edit_message_text(f"✅ Granted (₹{rw}) for {tgt}", call.message.chat.id, call.message.message_id)
 
     elif data.startswith("apprw_") and is_admin(user_id): 
         pid = int(data.split("_")[1])
