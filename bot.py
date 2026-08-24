@@ -110,14 +110,25 @@ def init_db():
         'alert_photo_gmail': 'none', 'alert_text_gmail': '🚀 Hurry up! New Gmail tasks are available in the bot.',
         'alert_photo_map': 'none', 'alert_text_map': '🚀 Hurry up! New Map Review tasks are available in the bot.',
         'recovery_email': 'your_recovery_mail@gmail.com',
-        'recovery_pass': 'your_app_password_here'
+        'recovery_pass': 'your_app_password_here',
+        'recovery_video': 'none', # 🔥 NEW
+        'welcome_text': 'none'    # 🔥 NEW
     }
     for k, v in default_settings.items():
         run_query("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", (k, v), commit=True)
 
 init_db()
 
-# --- STRICT OTP FETCHER (MATCHES GMAIL ID) ---
+# --- SAFE GMAIL EXTRACTOR FROM CAPTION ---
+def extract_gmail_from_caption(caption):
+    if not caption: return "Unknown"
+    for line in caption.split('\n'):
+        if '📧' in line:
+            clean_line = re.sub(r'<[^>]+>', '', line)
+            return clean_line.replace('📧', '').replace('Gmail:', '').strip()
+    return "Unknown"
+
+# --- AUTOMATIC GOOGLE OTP FETCHER ---
 def get_latest_google_otp(target_gmail):
     user = get_setting('recovery_email')
     password = get_setting('recovery_pass')
@@ -129,7 +140,6 @@ def get_latest_google_otp(target_gmail):
         status, messages = mail.search(None, '(FROM "google.com")')
         if status == "OK" and messages[0]:
             email_ids = messages[0].split()
-            # Last 5 emails check karte hain taaki delay hone par bhi match ho jaye
             for e_id in reversed(email_ids[-5:]):
                 status, msg_data = mail.fetch(e_id, "(RFC822)")
                 for response_part in msg_data:
@@ -150,7 +160,6 @@ def get_latest_google_otp(target_gmail):
                             full_text += msg.get_payload(decode=True).decode(errors="ignore") + " "
                             
                         target_local = target_gmail.split('@')[0].lower()
-                        # Strict match: Email ID verify karo
                         if target_local in full_text.lower() or target_gmail.lower() in full_text.lower():
                             match = re.search(r'\b\d{6}\b', full_text)
                             if match: return match.group(0)
@@ -208,27 +217,6 @@ def process_broadcast(admin_id, msg_id):
     try: bot.send_message(admin_id, f"✅ <b>Broadcast Completed Successfully!</b>\n\n🚀 Delivered: {success}\n❌ Failed: {failed}", parse_mode="HTML")
     except: pass
 
-def auto_broadcast_stock(count, task_type):
-    if task_type == 'gmail':
-        photo_id = get_setting('alert_photo_gmail')
-        raw_text = get_setting('alert_text_gmail')
-        t_name = "New Gmail Tasks"
-    else:
-        photo_id = get_setting('alert_photo_map')
-        raw_text = get_setting('alert_text_map')
-        t_name = "Map Review Tasks"
-        
-    msg = f"🚀 <b>NEW TASKS AVAILABLE!</b>\n\n📌 <b>Stock Added:</b> {count} {t_name}\n━━━━━━━━━━━━━━━━━━\n{raw_text}"
-    users = get_all_users()
-    for u in users:
-        try:
-            if photo_id and photo_id != 'none' and photo_id != '0':
-                bot.send_photo(u, photo_id, caption=msg, parse_mode="HTML")
-            else:
-                bot.send_message(u, msg, parse_mode="HTML")
-            time.sleep(0.035)
-        except: pass
-
 def admin_markup(user_id):
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("⚙️ Bot Settings", callback_data="adm_panel_settings"))
@@ -267,6 +255,10 @@ def send_welcome(message):
     username = message.from_user.username
     uname_str = f"@{username}" if username else str(message.from_user.first_name)
     
+    # 🔥 AUTO-CANCEL PENDING TASKS ON /start
+    run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE status='PENDING' AND assigned_to=%s", (user_id,), commit=True)
+    run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE status='PENDING' AND assigned_to=%s", (user_id,), commit=True)
+    
     if get_setting('bot_status') == 'OFF' and not is_admin(user_id):
         bot.send_message(user_id, "🛠️ <b>Bot Is Under Maintenance Fixing Bug And Updating</b>\nPlease check back later.", parse_mode="HTML")
         return
@@ -283,6 +275,12 @@ def send_welcome(message):
            f"Greetings <b>{message.from_user.first_name}</b>, we are delighted to have you here! 💼\n\n"
            f"Complete verified micro-tasks and earn real cash instantly directly to your account.\n\n"
            f"🔰 <b>Please select an option below to begin:</b>")
+           
+    # 🔥 EXTRA WELCOME TEXT
+    ext_welc = get_setting('welcome_text')
+    if ext_welc and ext_welc.lower() != 'none':
+        msg += f"\n\n{ext_welc}"
+        
     bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=main_menu(user_id))
 
 @bot.message_handler(content_types=['text', 'photo', 'video', 'document'])
@@ -301,6 +299,23 @@ def handle_all_messages(message):
     # ADMIN STATES
     if user_id in user_states:
         state = user_states[user_id].get('state')
+
+        # SETTINGS UPLOADS
+        if state == 'admin_wait_welcome' and is_admin(user_id):
+            update_setting('welcome_text', text.strip())
+            bot.send_message(user_id, "✅ <b>Welcome Text Updated Successfully!</b>", parse_mode="HTML", reply_markup=admin_markup(user_id))
+            del user_states[user_id]
+            return
+
+        if state == 'admin_wait_rec_vid' and is_admin(user_id):
+            if message.content_type == 'video':
+                update_setting('recovery_video', message.video.file_id)
+                bot.send_message(user_id, "✅ <b>Recovery Video Saved Successfully!</b>", parse_mode="HTML", reply_markup=admin_markup(user_id))
+            else:
+                update_setting('recovery_video', 'none')
+                bot.send_message(user_id, "✅ <b>Recovery Video Removed.</b>", parse_mode="HTML", reply_markup=admin_markup(user_id))
+            del user_states[user_id]
+            return
 
         if state == 'admin_wait_rec_email' and is_admin(user_id):
             update_setting('recovery_email', text.strip())
@@ -355,6 +370,7 @@ def handle_all_messages(message):
             threading.Thread(target=process_broadcast, args=(user_id, message.message_id)).start()
             return
             
+        # SCREENSHOT SUBMISSIONS
         if state == 'new_gmail_task_ss':
             if message.content_type == 'photo':
                 tid = user_states[user_id]['task_id']
@@ -434,6 +450,14 @@ def handle_all_messages(message):
                 return
             free_expired_gmail_tasks()
             
+            # 🔥 PENDING CHECK WITH "CANCEL ALL" OPTION
+            pend_chk = run_query("SELECT count(id) FROM new_gmail_tasks WHERE assigned_to=%s AND status='PENDING'", (user_id,), fetch='one')[0]
+            if pend_chk > 0:
+                markup = InlineKeyboardMarkup()
+                markup.add(InlineKeyboardButton("🗑️ Cancel All Pending Tasks", callback_data="cancel_all_pend_ngm"))
+                bot.send_message(user_id, f"⚠️ Aapke paas pehle se {pend_chk} pending tasks hain! Unhe submit karein ya cancel karein.", parse_mode="HTML", reply_markup=markup)
+                return
+
             r_single = get_setting('reward_newgmail_single')
             r_bulk = get_setting('reward_newgmail_bulk')
             
@@ -813,6 +837,10 @@ def callback_query(call):
         except: pass
         bot.send_message(user_id, "🏠 <b>Main Menu</b>", parse_mode="HTML", reply_markup=main_menu(user_id))
 
+    elif data == "cancel_all_pend_ngm":
+        run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE status='PENDING' AND assigned_to=%s", (user_id,), commit=True)
+        bot.edit_message_text("✅ All your pending tasks have been safely cancelled. You can now take new tasks.", user_id, call.message.message_id)
+
     elif data == "locked_bulk":
         submitted_count_res = run_query("SELECT count(id) FROM new_gmail_tasks WHERE assigned_to=%s AND status IN ('SUBMITTED', 'COMPLETED') AND assigned_time >= NOW() - INTERVAL '24 hours'", (user_id,), fetch='one')
         submitted_count = submitted_count_res[0] if submitted_count_res else 0
@@ -850,6 +878,7 @@ def callback_query(call):
         else:
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
+    # 🔥 SPAM-PROOF GMAIL ALLOCATION
     elif data.startswith("ngm_go_"):
         with get_user_lock(user_id):
             mode = data.split("_")[2]
@@ -857,7 +886,9 @@ def callback_query(call):
             
             pend_chk = run_query("SELECT count(id) FROM new_gmail_tasks WHERE assigned_to=%s AND status='PENDING'", (user_id,), fetch='one')[0]
             if pend_chk > 0:
-                bot.send_message(user_id, f"⚠️ Aapke paas pehle se pending tasks hain! Unhe submit ya cancel karein.", parse_mode="HTML")
+                markup = InlineKeyboardMarkup()
+                markup.add(InlineKeyboardButton("🗑️ Cancel All Pending Tasks", callback_data="cancel_all_pend_ngm"))
+                bot.send_message(user_id, f"⚠️ Aapke paas pehle se {pend_chk} pending tasks hain! Pehle unhe cancel ya submit karein.", parse_mode="HTML", reply_markup=markup)
                 return
 
             limit = 1 if mode == "single" else 10
@@ -904,10 +935,19 @@ def callback_query(call):
         
         markup = InlineKeyboardMarkup()
         markup.row(InlineKeyboardButton("📥 Get Verification OTP", callback_data=f"ngmotp_{tid}"))
+        markup.row(InlineKeyboardButton("📹 How To Add Recovery", callback_data="show_rec_vid"))
         markup.row(InlineKeyboardButton("❌ Cancel Task", callback_data=f"ngm_cancel_{tid}"))
         
         try: bot.edit_message_text(msg, user_id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
         except: pass
+
+    elif data == "show_rec_vid":
+        vid = get_setting('recovery_video')
+        if vid and vid != 'none':
+            try: bot.send_video(user_id, vid, caption="📺 <b>How to Add Recovery Email (Tutorial)</b>", parse_mode="HTML")
+            except: bot.answer_callback_query(call.id, "Video format issue!", show_alert=True)
+        else:
+            bot.answer_callback_query(call.id, "Video not set by Admin yet!", show_alert=True)
 
     elif data.startswith("ngmotp_"):
         tid = int(data.split("_")[1])
@@ -1022,16 +1062,14 @@ def callback_query(call):
         markup.add(InlineKeyboardButton("⏭️ Next Pending Task", callback_data="review_pend_gmail"))
         markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
         
-        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> {t_gmail}\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        try: bot.edit_message_caption(f"❌ Rejected (Re-queued) | User: {tgt}\n📧 Gmail: <code>{t_gmail}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
         except: 
             try: bot.edit_message_text(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> {t_gmail}\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
             except: pass
 
     elif data.startswith("oldbuyer_"):
         tgt = int(data.split("_")[1])
-        t_gmail = "Unknown"
-        if call.message.caption and "📧" in call.message.caption:
-            t_gmail = call.message.caption.split("📧")[1].strip().split("\n")[0]
+        t_gmail = extract_gmail_from_caption(call.message.caption)
             
         u_msg = (f"🔔 <b>STATUS UPDATE</b>\n"
                  f"Your Old Gmail Address <code>{t_gmail}</code> Has Been Submitted To Buyer.\n"
@@ -1064,10 +1102,7 @@ def callback_query(call):
         else: r_txt = "Device Verification Mail Not Accepted"
         
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('CREATE_GMAIL', 'REJECT')", commit=True)
-        
-        t_gmail = "Unknown"
-        if call.message.caption and "📧" in call.message.caption:
-            t_gmail = call.message.caption.split("📧")[1].strip().split("\n")[0]
+        t_gmail = extract_gmail_from_caption(call.message.caption)
             
         try: bot.send_message(tgt, f"❌ <b>Your Task Rejected!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: {r_txt}", parse_mode="HTML")
         except: pass
@@ -1094,10 +1129,7 @@ def callback_query(call):
         else: r_txt = "Device Verification Mail Not Accepted"
         
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('OLD_GMAIL', 'REJECT')", commit=True)
-        
-        t_gmail = "Unknown"
-        if call.message.caption and "📧" in call.message.caption:
-            t_gmail = call.message.caption.split("📧")[1].strip().split("\n")[0]
+        t_gmail = extract_gmail_from_caption(call.message.caption)
             
         try: bot.send_message(tgt, f"❌ <b>Your Task Rejected!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: {r_txt}", parse_mode="HTML")
         except: pass
@@ -1163,9 +1195,18 @@ def callback_query(call):
         markup.row(InlineKeyboardButton("📊 Total Users", callback_data="admin_total_users"), InlineKeyboardButton("👥 All User Balances", callback_data="admin_user_balances"))
         markup.row(InlineKeyboardButton("⚙️ Set Min Withdraw", callback_data="admin_set_min"), InlineKeyboardButton("🔑 Legacy Pass", callback_data="admin_set_pass"))
         markup.row(InlineKeyboardButton("🔑 Set Rec Email", callback_data="adm_set_rec_mail"), InlineKeyboardButton("🔑 Set Rec Pass", callback_data="adm_set_rec_pass"))
+        markup.row(InlineKeyboardButton("📹 Set Rec Video", callback_data="adm_set_rec_vid"), InlineKeyboardButton("📝 Set Welcome Text", callback_data="adm_set_welcome"))
         markup.row(InlineKeyboardButton("📜 Approved WDs", callback_data="admin_approved_list"), InlineKeyboardButton("🖼️ Warning Photo", callback_data="admin_set_warning_photo"))
         markup.row(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
         bot.edit_message_text("⚙️ <b>BOT SETTINGS & CONFIGURATION</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+
+    elif data == "adm_set_welcome" and is_admin(user_id):
+        user_states[user_id] = {'state': 'admin_wait_welcome'}
+        bot.send_message(user_id, "📝 <b>WELCOME TEXT SETUP</b>\nPlease send the text you want to appear below the default /start welcome message.\n<i>(Send 'none' if you want to remove the extra text)</i>", parse_mode="HTML")
+
+    elif data == "adm_set_rec_vid" and is_admin(user_id):
+        user_states[user_id] = {'state': 'admin_wait_rec_vid'}
+        bot.send_message(user_id, "📹 <b>RECOVERY VIDEO SETUP</b>\nPlease upload the video file directly here.\n<i>(Send any text to remove the video)</i>", parse_mode="HTML")
 
     elif data == "adm_set_rec_mail" and is_admin(user_id):
         user_states[user_id] = {'state': 'admin_wait_rec_email'}
@@ -1512,6 +1553,7 @@ def callback_query(call):
         markup.row(InlineKeyboardButton("📊 Total Users", callback_data="admin_total_users"), InlineKeyboardButton("👥 All User Balances", callback_data="admin_user_balances"))
         markup.row(InlineKeyboardButton("⚙️ Set Min Withdraw", callback_data="admin_set_min"), InlineKeyboardButton("🔑 Legacy Pass", callback_data="admin_set_pass"))
         markup.row(InlineKeyboardButton("🔑 Set Rec Email", callback_data="adm_set_rec_mail"), InlineKeyboardButton("🔑 Set Rec Pass", callback_data="adm_set_rec_pass"))
+        markup.row(InlineKeyboardButton("📹 Set Rec Video", callback_data="adm_set_rec_vid"), InlineKeyboardButton("📝 Set Welcome Text", callback_data="adm_set_welcome"))
         markup.row(InlineKeyboardButton("📜 Approved WDs", callback_data="admin_approved_list"), InlineKeyboardButton("🖼️ Warning Photo", callback_data="admin_set_warning_photo"))
         markup.row(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
         
@@ -1603,15 +1645,13 @@ def callback_query(call):
         add_balance(tgt, rw, "Gmail Task Approved")
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('CREATE_GMAIL', 'APPROVE')", commit=True)
         
-        t_gmail = "Unknown"
-        if call.message.caption and "📧" in call.message.caption:
-            t_gmail = call.message.caption.split("📧")[1].strip().split("\n")[0]
+        t_gmail = extract_gmail_from_caption(call.message.caption)
             
         try: bot.send_message(tgt, f"🎉 <b>Validation Complete!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💰 ₹{rw} added for Legacy Gmail Task.", parse_mode="HTML")
         except: pass
 
-        try: bot.edit_message_caption(f"✅ Granted (₹{rw}) for {tgt}", call.message.chat.id, call.message.message_id)
-        except: bot.edit_message_text(f"✅ Granted (₹{rw}) for {tgt}", call.message.chat.id, call.message.message_id)
+        try: bot.edit_message_caption(f"✅ Granted (₹{rw}) for {tgt}\n📧 <b>Gmail:</b> {t_gmail}", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        except: bot.edit_message_text(f"✅ Granted (₹{rw}) for {tgt}\n📧 <b>Gmail:</b> {t_gmail}", call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
     elif data.startswith("apprw_") and is_admin(user_id): 
         pid = int(data.split("_")[1])
