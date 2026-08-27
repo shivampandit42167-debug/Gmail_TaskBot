@@ -23,6 +23,7 @@ USDT_TO_INR_RATE = 94.0
 
 bot = telebot.TeleBot(TOKEN, threaded=True, num_threads=20)
 user_states = {}
+settings_cache = {} # 🔥 ULTRA FAST RAM CACHE SYSTEM
 
 # 🔥 ANTI-SPAM THREAD LOCKS
 user_locks = {}
@@ -113,10 +114,16 @@ def init_db():
         'recovery_pass': 'your_app_password_here',
         'recovery_video': 'none',
         'welcome_text': 'none',
-        'req_recovery_mail': 'ON' # 🔥 NEW: Toggle for Recovery System
+        'req_recovery_mail': 'ON'
     }
     for k, v in default_settings.items():
         run_query("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", (k, v), commit=True)
+        
+    # LOAD SETTINGS INTO RAM CACHE FOR INSTANT UX
+    records = run_query("SELECT key, value FROM settings", fetch='all')
+    if records:
+        for k, v in records:
+            settings_cache[k] = str(v)
 
 init_db()
 
@@ -171,18 +178,21 @@ def get_latest_google_otp(target_gmail):
         print("IMAP Error:", e)
         return None
 
-# --- HELPERS ---
+# --- ULTRA FAST SETTING HELPERS ---
 def is_admin(user_id):
     if user_id == OWNER_ID: return True
     res = run_query("SELECT user_id FROM admins WHERE user_id=%s", (user_id,), fetch='one')
     return res is not None
 
 def get_setting(key):
-    res = run_query("SELECT value FROM settings WHERE key=%s", (key,), fetch='one')
-    return res[0] if res else 'none'
+    # Fetch from RAM directly - 0.0001ms speed!
+    return settings_cache.get(key, 'none')
 
 def update_setting(key, value):
-    run_query("UPDATE settings SET value=%s WHERE key=%s", (str(value), key), commit=True)
+    # Update RAM instantly
+    settings_cache[key] = str(value)
+    # Update DB in Background to avoid lag
+    threading.Thread(target=run_query, args=("UPDATE settings SET value=%s WHERE key=%s", (str(value), key), None, True)).start()
 
 def get_balance(user_id):
     res = run_query("SELECT balance FROM users WHERE user_id=%s", (user_id,), fetch='one')
@@ -1383,7 +1393,7 @@ def callback_query(call):
         markup.row(InlineKeyboardButton("📦 View Current Stock", callback_data="ngm_view_stock"), InlineKeyboardButton("🛠️ Delete Task (ID)", callback_data="ngm_manage_id"))
         markup.row(InlineKeyboardButton("🗑️ Delete ALL Gmails", callback_data="ngm_delete_all"))
         markup.row(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
-        bot.edit_message_text(f"📧 <b>GMAIL MANAGEMENT PANEL</b>\n━━━━━━━━━━━━━━━━━━━\nAssets in Stock: <b>0</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        bot.edit_message_text(f"📧 <b>GMAIL MANAGEMENT PANEL</b>\n━━━━━━━━━━━━━━━━━━━\nAssets in Stock: <b>{avail}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
 
     elif data == "ngm_add_single" and is_admin(user_id):
         user_states[user_id] = {'state': 'admin_ngm_add_single'}
@@ -1748,5 +1758,5 @@ def callback_query(call):
 if __name__ == "__main__":
     try: bot.remove_webhook()
     except Exception as e: pass
-    print("🤖 Ultra-Fast Boss System Online. Running Infinity Polling...")
+    print("🤖 Ultra-Fast VIP System Online. Running Infinity Polling...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
