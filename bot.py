@@ -21,7 +21,7 @@ ADMIN_USERNAME = 'Raka_01'
 DATABASE_URL = 'postgresql://neondb_owner:npg_TFXNmVEARt72@ep-twilight-sunset-axd07o2j-pooler.c-4.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require' 
 USDT_TO_INR_RATE = 94.0  
 
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(TOKEN, threaded=True, num_threads=20)
 user_states = {}
 
 # 🔥 ANTI-SPAM THREAD LOCKS
@@ -77,7 +77,7 @@ def run_query(query, params=(), fetch=None, commit=False):
         except Exception as e:
             if conn:
                 db_pool.putconn(conn, close=True) 
-            time.sleep(0.2)
+            time.sleep(0.1)
     return None
 
 # --- INIT DATABASE ---
@@ -112,7 +112,8 @@ def init_db():
         'recovery_email': 'your_recovery_mail@gmail.com',
         'recovery_pass': 'your_app_password_here',
         'recovery_video': 'none',
-        'welcome_text': 'none'
+        'welcome_text': 'none',
+        'req_recovery_mail': 'ON' # 🔥 NEW: Toggle for Recovery System
     }
     for k, v in default_settings.items():
         run_query("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", (k, v), commit=True)
@@ -219,27 +220,6 @@ def process_broadcast(admin_id, msg_id):
     try: bot.send_message(admin_id, f"✅ <b>Broadcast Completed Successfully!</b>\n\n🚀 Delivered: {success}\n❌ Failed: {failed}", parse_mode="HTML")
     except: pass
 
-def auto_broadcast_stock(count, task_type):
-    if task_type == 'gmail':
-        photo_id = get_setting('alert_photo_gmail')
-        raw_text = get_setting('alert_text_gmail')
-        t_name = "New Gmail Tasks"
-    else:
-        photo_id = get_setting('alert_photo_map')
-        raw_text = get_setting('alert_text_map')
-        t_name = "Map Review Tasks"
-        
-    msg = f"🚀 <b>NEW TASKS AVAILABLE!</b>\n\n📌 <b>Stock Added:</b> {count} {t_name}\n━━━━━━━━━━━━━━━━━━\n{raw_text}"
-    users = get_all_users()
-    for u in users:
-        try:
-            if photo_id and photo_id != 'none' and photo_id != '0':
-                bot.send_photo(u, photo_id, caption=msg, parse_mode="HTML")
-            else:
-                bot.send_message(u, msg, parse_mode="HTML")
-            time.sleep(0.035)
-        except: pass
-
 def admin_markup(user_id):
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("⚙️ Bot Settings", callback_data="adm_panel_settings"))
@@ -299,7 +279,6 @@ def send_welcome(message):
            f"Complete verified micro-tasks and earn real cash instantly directly to your account.\n\n"
            f"🔰 <b>Please select an option below to begin:</b>")
            
-    # EXTRA WELCOME TEXT
     ext_welc = get_setting('welcome_text')
     if ext_welc and ext_welc.lower() != 'none':
         msg += f"\n\n{ext_welc}"
@@ -812,8 +791,10 @@ def callback_query(call):
     user_id = call.message.chat.id
     data = call.data
     
-    try: bot.answer_callback_query(call.id)
-    except: pass
+    # 🔥 ULTRA FAST UX: Answer callback instantly to kill loading spinner!
+    if not data.startswith("ngmotp_"): 
+        try: bot.answer_callback_query(call.id)
+        except: pass
 
     if data.startswith("betplay_"):
         if user_id not in user_states or user_states[user_id].get('state') != 'wait_bet_side':
@@ -900,6 +881,7 @@ def callback_query(call):
         else:
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
+    # 🔥 SPAM-PROOF GMAIL ALLOCATION WITH TOGGLE LOGIC
     elif data.startswith("ngm_go_"):
         with get_user_lock(user_id):
             mode = data.split("_")[2]
@@ -934,15 +916,23 @@ def callback_query(call):
             
             bot.send_message(user_id, f"🎉 <b>Tasks Allocated!</b>\n\nEk baar me sirf utne hi tasks mile hain jitne stock me the (Max {limit}).", parse_mode="HTML")
             
+            rec_sys_active = get_setting('req_recovery_mail')
+            
             for t in tasks:
                 tid, t_gmail, t_pass = t
                 msg = (f"📧 <b>GMAIL TASK DETAILS</b>\n━━━━━━━━━━━━━━━━━━━\n\n"
                        f"<b>Gmail Name:</b> <code>{t_gmail}</code>\n"
                        f"<b>Password:</b> <code>{t_pass}</code>\n\n"
-                       f"⏳ <b>Time Limit</b> ➔ 15 Minutes\n\n"
-                       f"<i>Jab account create ho jaye toh 'Done' par click karein.</i>")
+                       f"⏳ <b>Time Limit</b> ➔ 15 Minutes\n\n")
+                       
                 markup = InlineKeyboardMarkup()
-                markup.row(InlineKeyboardButton("✅ Done (Add Recovery)", callback_data=f"ngmdone_{tid}"), InlineKeyboardButton("❌ Cancel Task", callback_data=f"ngm_cancel_{tid}"))
+                if rec_sys_active == 'ON':
+                    msg += f"<i>Jab account create ho jaye toh 'Done' par click karein.</i>"
+                    markup.row(InlineKeyboardButton("✅ Done (Add Recovery)", callback_data=f"ngmdone_{tid}"), InlineKeyboardButton("❌ Cancel Task", callback_data=f"ngm_cancel_{tid}"))
+                else:
+                    msg += f"<i>Account banne ke baad sidha Screenshot Submit karein.</i>"
+                    markup.row(InlineKeyboardButton("📤 Submit Proof", callback_data=f"ngm_ss_{tid}"), InlineKeyboardButton("❌ Cancel Task", callback_data=f"ngm_cancel_{tid}"))
+                    
                 bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
     elif data.startswith("ngmdone_"):
@@ -966,9 +956,9 @@ def callback_query(call):
         vid = get_setting('recovery_video')
         if vid and vid != 'none':
             try: bot.send_video(user_id, vid, caption="📺 <b>How to Add Recovery Email (Tutorial)</b>", parse_mode="HTML")
-            except: bot.answer_callback_query(call.id, "Video format issue!", show_alert=True)
+            except: bot.send_message(user_id, "⚠️ Video file is corrupt or invalid format.", parse_mode="HTML")
         else:
-            bot.answer_callback_query(call.id, "Video not set by Admin yet!", show_alert=True)
+            bot.send_message(user_id, "⚠️ Admin ne abhi tak koi tutorial video set nahi ki hai.", parse_mode="HTML")
 
     elif data.startswith("ngmotp_"):
         tid = int(data.split("_")[1])
@@ -1123,16 +1113,13 @@ def callback_query(call):
         else: r_txt = "Device Verification Mail Not Accepted"
         
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('CREATE_GMAIL', 'REJECT')", commit=True)
-        
         t_gmail = extract_gmail(call.message)
             
         try: bot.send_message(tgt, f"❌ <b>Your Task Rejected!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: {r_txt}", parse_mode="HTML")
         except: pass
         
-        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-        except: 
-            try: bot.edit_message_text(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-            except: pass
+        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        except: bot.edit_message_text(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
     elif data.startswith("oldrej_"):
         tgt = int(data.split("_")[1])
@@ -1153,16 +1140,13 @@ def callback_query(call):
         else: r_txt = "Device Verification Mail Not Accepted"
         
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('OLD_GMAIL', 'REJECT')", commit=True)
-        
         t_gmail = extract_gmail(call.message)
             
         try: bot.send_message(tgt, f"❌ <b>Your Task Rejected!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: {r_txt}", parse_mode="HTML")
         except: pass
         
-        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-        except: 
-            try: bot.edit_message_text(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
-            except: pass
+        try: bot.edit_message_caption(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
+        except: bot.edit_message_text(f"❌ Denied for <code>{tgt}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML")
 
     elif data == "map_agree":
         with get_user_lock(user_id):
@@ -1215,7 +1199,9 @@ def callback_query(call):
     elif data == "adm_panel_settings" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
         stat = get_setting('bot_status')
+        rec_sys = get_setting('req_recovery_mail') # 🔥 NEW TOGGLE
         markup.row(InlineKeyboardButton(f"🤖 Bot Power: {stat}", callback_data="admin_bot_toggle"))
+        markup.row(InlineKeyboardButton(f"🔐 Recovery System: {rec_sys}", callback_data="toggle_rec_sys")) # 🔥 NEW BUTTON
         markup.row(InlineKeyboardButton("👁️ Visibility Toggles", callback_data="admin_vis_toggles"), InlineKeyboardButton("⛔ Closed Alerts", callback_data="admin_stat_toggles"))
         markup.row(InlineKeyboardButton("💰 Set Task Rewards", callback_data="admin_reward_menu"), InlineKeyboardButton("⚙️ Auto-Alert Setup", callback_data="admin_set_auto_alert"))
         if user_id == OWNER_ID: markup.row(InlineKeyboardButton("👥 Manage Admins", callback_data="admin_manage"))
@@ -1226,6 +1212,28 @@ def callback_query(call):
         markup.row(InlineKeyboardButton("📜 Approved WDs", callback_data="admin_approved_list"), InlineKeyboardButton("🖼️ Warning Photo", callback_data="admin_set_warning_photo"))
         markup.row(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
         bot.edit_message_text("⚙️ <b>BOT SETTINGS & CONFIGURATION</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+
+    # 🔥 NEW RECOVERY TOGGLE ACTION
+    elif data == "toggle_rec_sys" and is_admin(user_id):
+        current = get_setting('req_recovery_mail')
+        new_stat = "OFF" if current == "ON" else "ON"
+        update_setting('req_recovery_mail', new_stat)
+        
+        markup = InlineKeyboardMarkup()
+        stat = get_setting('bot_status')
+        rec_sys = new_stat
+        markup.row(InlineKeyboardButton(f"🤖 Bot Power: {stat}", callback_data="admin_bot_toggle"))
+        markup.row(InlineKeyboardButton(f"🔐 Recovery System: {rec_sys}", callback_data="toggle_rec_sys"))
+        markup.row(InlineKeyboardButton("👁️ Visibility Toggles", callback_data="admin_vis_toggles"), InlineKeyboardButton("⛔ Closed Alerts", callback_data="admin_stat_toggles"))
+        markup.row(InlineKeyboardButton("💰 Set Task Rewards", callback_data="admin_reward_menu"), InlineKeyboardButton("⚙️ Auto-Alert Setup", callback_data="admin_set_auto_alert"))
+        if user_id == OWNER_ID: markup.row(InlineKeyboardButton("👥 Manage Admins", callback_data="admin_manage"))
+        markup.row(InlineKeyboardButton("📊 Total Users", callback_data="admin_total_users"), InlineKeyboardButton("👥 All User Balances", callback_data="admin_user_balances"))
+        markup.row(InlineKeyboardButton("⚙️ Set Min Withdraw", callback_data="admin_set_min"), InlineKeyboardButton("🔑 Legacy Pass", callback_data="admin_set_pass"))
+        markup.row(InlineKeyboardButton("🔑 Set Rec Email", callback_data="adm_set_rec_mail"), InlineKeyboardButton("🔑 Set Rec Pass", callback_data="adm_set_rec_pass"))
+        markup.row(InlineKeyboardButton("📹 Set Rec Video", callback_data="adm_set_rec_vid"), InlineKeyboardButton("📝 Set Welcome Text", callback_data="adm_set_welcome"))
+        markup.row(InlineKeyboardButton("📜 Approved WDs", callback_data="admin_approved_list"), InlineKeyboardButton("🖼️ Warning Photo", callback_data="admin_set_warning_photo"))
+        markup.row(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
 
     elif data == "adm_set_welcome" and is_admin(user_id):
         user_states[user_id] = {'state': 'admin_wait_welcome'}
@@ -1573,7 +1581,9 @@ def callback_query(call):
         
         markup = InlineKeyboardMarkup()
         stat = get_setting('bot_status')
+        rec_sys = get_setting('req_recovery_mail')
         markup.row(InlineKeyboardButton(f"🤖 Bot Power: {stat}", callback_data="admin_bot_toggle"))
+        markup.row(InlineKeyboardButton(f"🔐 Recovery System: {rec_sys}", callback_data="toggle_rec_sys"))
         markup.row(InlineKeyboardButton("👁️ Visibility Toggles", callback_data="admin_vis_toggles"), InlineKeyboardButton("⛔ Closed Alerts", callback_data="admin_stat_toggles"))
         markup.row(InlineKeyboardButton("💰 Set Task Rewards", callback_data="admin_reward_menu"), InlineKeyboardButton("⚙️ Auto-Alert Setup", callback_data="admin_set_auto_alert"))
         if user_id == OWNER_ID: markup.row(InlineKeyboardButton("👥 Manage Admins", callback_data="admin_manage"))
@@ -1738,5 +1748,5 @@ def callback_query(call):
 if __name__ == "__main__":
     try: bot.remove_webhook()
     except Exception as e: pass
-    print("🤖 VIP Boss System Online. Running Infinity Polling...")
+    print("🤖 Ultra-Fast Boss System Online. Running Infinity Polling...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
