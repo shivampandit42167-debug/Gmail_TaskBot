@@ -119,7 +119,6 @@ def init_db():
     for k, v in default_settings.items():
         run_query("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", (k, v), commit=True)
         
-    # LOAD SETTINGS INTO RAM CACHE FOR INSTANT UX
     records = run_query("SELECT key, value FROM settings", fetch='all')
     if records:
         for k, v in records:
@@ -127,7 +126,7 @@ def init_db():
 
 init_db()
 
-# 🔥 BUG-FREE GMAIL EXTRACTOR (Works on both Photo & Text)
+# 🔥 BUG-FREE GMAIL EXTRACTOR 
 def extract_gmail(message):
     text = message.caption if message.caption else message.text
     if not text: return "Unknown"
@@ -185,13 +184,10 @@ def is_admin(user_id):
     return res is not None
 
 def get_setting(key):
-    # Fetch from RAM directly - 0.0001ms speed!
     return settings_cache.get(key, 'none')
 
 def update_setting(key, value):
-    # Update RAM instantly
     settings_cache[key] = str(value)
-    # Update DB in Background to avoid lag
     threading.Thread(target=run_query, args=("UPDATE settings SET value=%s WHERE key=%s", (str(value), key), None, True)).start()
 
 def get_balance(user_id):
@@ -382,10 +378,18 @@ def handle_all_messages(message):
             threading.Thread(target=process_broadcast, args=(user_id, message.message_id)).start()
             return
             
-        # SCREENSHOT SUBMISSIONS
+        # 🔥 SCREENSHOT SUBMISSION (STRICT CHECK BUG FIX)
         if state == 'new_gmail_task_ss':
             if message.content_type == 'photo':
                 tid = user_states[user_id]['task_id']
+                
+                # Double check to prevent submitting an expired/re-assigned task
+                task_check = run_query("SELECT status, assigned_to FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
+                if not task_check or task_check[0] != 'PENDING' or task_check[1] != user_id:
+                    bot.send_message(user_id, "❌ <b>Task Expired!</b>\n15 Minute se zyada time lene ki wajah se yeh task expire ho chuka hai. Kripya naya task lein.", parse_mode="HTML", reply_markup=main_menu(user_id))
+                    del user_states[user_id]
+                    return
+
                 file_id = message.photo[-1].file_id
                 run_query("UPDATE new_gmail_tasks SET status='SUBMITTED', ss_file_id=%s WHERE id=%s", (file_id, tid), commit=True)
                 
@@ -434,8 +438,15 @@ def handle_all_messages(message):
         if state == 'map_task_screenshot':
             if message.content_type == 'photo':
                 task_id = user_states[user_id]['task_id']
-                file_id = message.photo[-1].file_id
                 
+                # Check for Map expiry as well
+                task_check = run_query("SELECT status, assigned_to FROM map_tasks WHERE id=%s", (task_id,), fetch='one')
+                if not task_check or task_check[0] != 'PENDING' or task_check[1] != user_id:
+                    bot.send_message(user_id, "❌ <b>Task Expired!</b>\nTime limit cross hone ke karan task expire ho chuka hai.", parse_mode="HTML", reply_markup=main_menu(user_id))
+                    del user_states[user_id]
+                    return
+                
+                file_id = message.photo[-1].file_id
                 run_query("UPDATE map_tasks SET status='SUBMITTED', ss_file_id=%s WHERE id=%s", (file_id, task_id), commit=True)
                 task_data = run_query("SELECT link, review_text FROM map_tasks WHERE id=%s", (task_id,), fetch='one')
                 t_link, t_txt = task_data if task_data else ("Unknown", "Unknown")
@@ -891,7 +902,6 @@ def callback_query(call):
         else:
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
-    # 🔥 SPAM-PROOF GMAIL ALLOCATION WITH TOGGLE LOGIC
     elif data.startswith("ngm_go_"):
         with get_user_lock(user_id):
             mode = data.split("_")[2]
@@ -974,6 +984,12 @@ def callback_query(call):
         tid = int(data.split("_")[1])
         bot.answer_callback_query(call.id, "Searching Inbox for OTP... Please wait.")
         
+        # Checking if task is still pending for this user before fetching OTP
+        task_check = run_query("SELECT status, assigned_to FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
+        if not task_check or task_check[0] != 'PENDING' or task_check[1] != user_id:
+            bot.answer_callback_query(call.id, "❌ Task expired! Cancel karke naya lijiye.", show_alert=True)
+            return
+
         t_gm = run_query("SELECT gmail FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
         target_gmail = t_gm[0] if t_gm else ""
         
@@ -999,7 +1015,7 @@ def callback_query(call):
 
     elif data.startswith("ngm_cancel_"):
         tid = int(data.split("_")[2])
-        run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE id=%s", (tid,), commit=True)
+        run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE id=%s AND assigned_to=%s", (tid, user_id), commit=True)
         bot.edit_message_text("❌ <b>Task Cancelled.</b> Returned safely to stock.", user_id, call.message.message_id, parse_mode="HTML")
 
     elif data.startswith("ngmbuyer_"):
@@ -1068,7 +1084,8 @@ def callback_query(call):
         
         t_gmail = extract_gmail(call.message)
         
-        run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE id=%s", (tid,), commit=True)
+        # 🔥 FIX: Reject task permanently, do not return to pool!
+        run_query("UPDATE new_gmail_tasks SET status='REJECTED', assigned_to=NULL, assigned_time=NULL WHERE id=%s", (tid,), commit=True)
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('GMAIL', 'REJECT')", commit=True)
         
         if reason_code == "1": r_txt = "You Gmail Account Is Already Used I Can't Accept This"
@@ -1083,9 +1100,9 @@ def callback_query(call):
         markup.add(InlineKeyboardButton("⏭️ Next Pending Task", callback_data="review_pend_gmail"))
         markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
         
-        try: bot.edit_message_caption(f"❌ Rejected (Re-queued) | User: <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        try: bot.edit_message_caption(f"❌ Rejected | User: <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
         except: 
-            try: bot.edit_message_text(f"❌ Rejected (Re-queued) | User: <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+            try: bot.edit_message_text(f"❌ Rejected | User: <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
             except: pass
 
     elif data.startswith("oldbuyer_"):
@@ -1182,7 +1199,7 @@ def callback_query(call):
                     LIMIT 1 FOR UPDATE SKIP LOCKED
                 ) 
                 RETURNING id, link, review_text
-            ''', (user_id, user_id), fetch='one', commit=True)
+            ''', (user_id,), fetch='one', commit=True)
             
             if not task:
                 bot.send_message(user_id, "🚫 We are currently out of Unique Review Tasks for you!", parse_mode="HTML")
@@ -1203,15 +1220,15 @@ def callback_query(call):
 
     elif data.startswith("mapcancel_"):
         t_id = data.split("_")[1]
-        run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
+        run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s AND assigned_to=%s", (t_id, user_id), commit=True)
         bot.edit_message_text("❌ <b>Operation Aborted.</b> The task has been successfully re-queued to the grid.", user_id, call.message.message_id, parse_mode="HTML")
 
     elif data == "adm_panel_settings" and is_admin(user_id):
         markup = InlineKeyboardMarkup()
         stat = get_setting('bot_status')
-        rec_sys = get_setting('req_recovery_mail') # 🔥 NEW TOGGLE
+        rec_sys = get_setting('req_recovery_mail') 
         markup.row(InlineKeyboardButton(f"🤖 Bot Power: {stat}", callback_data="admin_bot_toggle"))
-        markup.row(InlineKeyboardButton(f"🔐 Recovery System: {rec_sys}", callback_data="toggle_rec_sys")) # 🔥 NEW BUTTON
+        markup.row(InlineKeyboardButton(f"🔐 Recovery System: {rec_sys}", callback_data="toggle_rec_sys")) 
         markup.row(InlineKeyboardButton("👁️ Visibility Toggles", callback_data="admin_vis_toggles"), InlineKeyboardButton("⛔ Closed Alerts", callback_data="admin_stat_toggles"))
         markup.row(InlineKeyboardButton("💰 Set Task Rewards", callback_data="admin_reward_menu"), InlineKeyboardButton("⚙️ Auto-Alert Setup", callback_data="admin_set_auto_alert"))
         if user_id == OWNER_ID: markup.row(InlineKeyboardButton("👥 Manage Admins", callback_data="admin_manage"))
@@ -1223,7 +1240,6 @@ def callback_query(call):
         markup.row(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
         bot.edit_message_text("⚙️ <b>BOT SETTINGS & CONFIGURATION</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
 
-    # 🔥 NEW RECOVERY TOGGLE ACTION
     elif data == "toggle_rec_sys" and is_admin(user_id):
         current = get_setting('req_recovery_mail')
         new_stat = "OFF" if current == "ON" else "ON"
@@ -1758,5 +1774,5 @@ def callback_query(call):
 if __name__ == "__main__":
     try: bot.remove_webhook()
     except Exception as e: pass
-    print("🤖 Ultra-Fast VIP System Online. Running Infinity Polling...")
+    print("🤖 Anti-Loop VIP System Online. Running Infinity Polling...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
