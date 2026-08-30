@@ -85,6 +85,7 @@ def run_query(query, params=(), fetch=None, commit=False):
 def init_db():
     run_query('''CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, balance FLOAT DEFAULT 0)''', commit=True)
     run_query('''ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT DEFAULT 'Unknown' ''', commit=True)
+    run_query('''ALTER TABLE users ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ACTIVE' ''', commit=True) # 🔥 NEW: BAN STATUS
     run_query('''CREATE TABLE IF NOT EXISTS history (id SERIAL PRIMARY KEY, user_id BIGINT, type TEXT, amount FLOAT, detail TEXT, date TEXT)''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS pending_withdraws (id SERIAL PRIMARY KEY, user_id BIGINT, method TEXT, address TEXT, amount FLOAT)''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS approved_withdraws (id SERIAL PRIMARY KEY, user_id BIGINT, method TEXT, address TEXT, amount FLOAT, date TEXT)''', commit=True)
@@ -183,6 +184,10 @@ def is_admin(user_id):
     res = run_query("SELECT user_id FROM admins WHERE user_id=%s", (user_id,), fetch='one')
     return res is not None
 
+def is_banned(user_id):
+    res = run_query("SELECT status FROM users WHERE user_id=%s", (user_id,), fetch='one')
+    return res and res[0] == 'BANNED'
+
 def get_setting(key):
     return settings_cache.get(key, 'none')
 
@@ -232,6 +237,8 @@ def admin_markup(user_id):
     markup.row(InlineKeyboardButton("📧 Gmail Panel", callback_data="adm_panel_gmail"), InlineKeyboardButton("🗺️ Map Panel", callback_data="adm_panel_map"))
     markup.row(InlineKeyboardButton("📊 Dashboard & Pending Tasks", callback_data="adm_panel_dash"))
     markup.row(InlineKeyboardButton("📢 Send Broadcast", callback_data="admin_broadcast"), InlineKeyboardButton("💸 Add Balance", callback_data="admin_addbal"))
+    # 🔥 NEW: Ban/Unban Menu
+    markup.row(InlineKeyboardButton("🚫 Ban/Unban User", callback_data="admin_ban_user"), InlineKeyboardButton("📋 Banned List", callback_data="admin_banned_list"))
     return markup
 
 def main_menu(user_id):
@@ -264,7 +271,10 @@ def send_welcome(message):
     username = message.from_user.username
     uname_str = f"@{username}" if username else str(message.from_user.first_name)
     
-    # 🔥 AUTO-CANCEL ALL PENDING TASKS ON /start
+    if is_banned(user_id):
+        bot.send_message(user_id, "❌ <b>Account Banned!</b>\nAapko is bot se ban kar diya gaya hai. Kripya admin se sampark karein.", parse_mode="HTML")
+        return
+    
     run_query("UPDATE new_gmail_tasks SET status='AVAILABLE', assigned_to=NULL, assigned_time=NULL WHERE status='PENDING' AND assigned_to=%s", (user_id,), commit=True)
     run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE status='PENDING' AND assigned_to=%s", (user_id,), commit=True)
     
@@ -296,6 +306,10 @@ def handle_all_messages(message):
     user_id = message.chat.id
     text = message.text if message.text else message.caption
 
+    if is_banned(user_id):
+        bot.send_message(user_id, "❌ <b>Account Banned!</b>\nAapko is bot se ban kar diya gaya hai.", parse_mode="HTML")
+        return
+
     username = message.from_user.username
     uname_str = f"@{username}" if username else str(message.from_user.first_name)
     run_query("UPDATE users SET username=%s WHERE user_id=%s", (uname_str, user_id), commit=True)
@@ -308,7 +322,32 @@ def handle_all_messages(message):
     if user_id in user_states:
         state = user_states[user_id].get('state')
 
-        # SETTINGS UPLOADS
+        # 🔥 BAN USER LOGIC
+        if state == 'admin_wait_ban_uid' and is_admin(user_id):
+            try:
+                target_uid = int(text.strip())
+                user_record = run_query("SELECT status FROM users WHERE user_id=%s", (target_uid,), fetch='one')
+                if not user_record:
+                    bot.send_message(user_id, "❌ User database mein nahi mila.", reply_markup=admin_markup(user_id))
+                else:
+                    current_status = user_record[0]
+                    new_status = 'ACTIVE' if current_status == 'BANNED' else 'BANNED'
+                    run_query("UPDATE users SET status=%s WHERE user_id=%s", (new_status, target_uid), commit=True)
+                    
+                    action_text = "Unbanned 🟢" if new_status == 'ACTIVE' else "Banned 🔴"
+                    bot.send_message(user_id, f"✅ User <code>{target_uid}</code> has been successfully <b>{action_text}</b>!", parse_mode="HTML", reply_markup=admin_markup(user_id))
+                    
+                    try:
+                        if new_status == 'BANNED':
+                            bot.send_message(target_uid, "❌ <b>Account Banned!</b>\nAapko is bot se ban kar diya gaya hai.", parse_mode="HTML")
+                        else:
+                            bot.send_message(target_uid, "✅ <b>Account Unbanned!</b>\nAapka ban hata diya gaya hai. Ab aap bot use kar sakte hain.", parse_mode="HTML")
+                    except: pass
+            except ValueError:
+                bot.send_message(user_id, "❌ Kripya valid numeric Telegram ID dalein.", reply_markup=admin_markup(user_id))
+            del user_states[user_id]
+            return
+
         if state == 'admin_wait_welcome' and is_admin(user_id):
             update_setting('welcome_text', text.strip())
             bot.send_message(user_id, "✅ <b>Welcome Text Updated Successfully!</b>", parse_mode="HTML", reply_markup=admin_markup(user_id))
@@ -378,12 +417,11 @@ def handle_all_messages(message):
             threading.Thread(target=process_broadcast, args=(user_id, message.message_id)).start()
             return
             
-        # 🔥 SCREENSHOT SUBMISSION (STRICT CHECK BUG FIX)
+        # SCREENSHOT SUBMISSIONS
         if state == 'new_gmail_task_ss':
             if message.content_type == 'photo':
                 tid = user_states[user_id]['task_id']
                 
-                # Double check to prevent submitting an expired/re-assigned task
                 task_check = run_query("SELECT status, assigned_to FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
                 if not task_check or task_check[0] != 'PENDING' or task_check[1] != user_id:
                     bot.send_message(user_id, "❌ <b>Task Expired!</b>\n15 Minute se zyada time lene ki wajah se yeh task expire ho chuka hai. Kripya naya task lein.", parse_mode="HTML", reply_markup=main_menu(user_id))
@@ -439,7 +477,6 @@ def handle_all_messages(message):
             if message.content_type == 'photo':
                 task_id = user_states[user_id]['task_id']
                 
-                # Check for Map expiry as well
                 task_check = run_query("SELECT status, assigned_to FROM map_tasks WHERE id=%s", (task_id,), fetch='one')
                 if not task_check or task_check[0] != 'PENDING' or task_check[1] != user_id:
                     bot.send_message(user_id, "❌ <b>Task Expired!</b>\nTime limit cross hone ke karan task expire ho chuka hai.", parse_mode="HTML", reply_markup=main_menu(user_id))
@@ -793,25 +830,16 @@ def handle_all_messages(message):
                 bot.send_message(OWNER_ID, f"🔔 <b>PAYOUT REQUEST</b>\n👤 <code>{user_id}</code>\n🏦 {meth}\n💰 {val}\n📌 <code>{text.strip()}</code>", parse_mode="HTML", reply_markup=markup)
                 del user_states[user_id]
 
-            elif st == 'admin_wait_uid' and is_admin(user_id):
-                try: user_states[user_id] = {'state': 'admin_wait_amt', 'uid': int(text)}; bot.send_message(user_id, "👉 Provide target amount in ₹:")
-                except: del user_states[user_id]
-
-            elif st == 'admin_wait_amt' and is_admin(user_id):
-                try:
-                    add_balance(state_data['uid'], float(text), "Admin Added Balance")
-                    bot.send_message(user_id, "✅ Liquidity successfully routed!", reply_markup=main_menu(user_id))
-                    try: bot.send_message(state_data['uid'], f"🎉 <b>System Notification</b>\nAn administrative bonus of ₹{text} has been credited to your portfolio!", parse_mode="HTML")
-                    except: pass
-                except: pass
-                del user_states[user_id]
-
 # --- SECURED CALLBACK QUERIES ---
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
     user_id = call.message.chat.id
     data = call.data
     
+    if is_banned(user_id):
+        bot.answer_callback_query(call.id, "❌ Account Banned! Aap bot use nahi kar sakte.", show_alert=True)
+        return
+
     # 🔥 ULTRA FAST UX: Answer callback instantly to kill loading spinner!
     if not data.startswith("ngmotp_"): 
         try: bot.answer_callback_query(call.id)
@@ -902,6 +930,7 @@ def callback_query(call):
         else:
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
 
+    # 🔥 SPAM-PROOF GMAIL ALLOCATION WITH TOGGLE LOGIC
     elif data.startswith("ngm_go_"):
         with get_user_lock(user_id):
             mode = data.split("_")[2]
@@ -984,7 +1013,6 @@ def callback_query(call):
         tid = int(data.split("_")[1])
         bot.answer_callback_query(call.id, "Searching Inbox for OTP... Please wait.")
         
-        # Checking if task is still pending for this user before fetching OTP
         task_check = run_query("SELECT status, assigned_to FROM new_gmail_tasks WHERE id=%s", (tid,), fetch='one')
         if not task_check or task_check[0] != 'PENDING' or task_check[1] != user_id:
             bot.answer_callback_query(call.id, "❌ Task expired! Cancel karke naya lijiye.", show_alert=True)
@@ -1084,7 +1112,6 @@ def callback_query(call):
         
         t_gmail = extract_gmail(call.message)
         
-        # 🔥 FIX: Reject task permanently, do not return to pool!
         run_query("UPDATE new_gmail_tasks SET status='REJECTED', assigned_to=NULL, assigned_time=NULL WHERE id=%s", (tid,), commit=True)
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('GMAIL', 'REJECT')", commit=True)
         
@@ -1199,7 +1226,7 @@ def callback_query(call):
                     LIMIT 1 FOR UPDATE SKIP LOCKED
                 ) 
                 RETURNING id, link, review_text
-            ''', (user_id,), fetch='one', commit=True)
+            ''', (user_id, user_id), fetch='one', commit=True)
             
             if not task:
                 bot.send_message(user_id, "🚫 We are currently out of Unique Review Tasks for you!", parse_mode="HTML")
@@ -1220,7 +1247,7 @@ def callback_query(call):
 
     elif data.startswith("mapcancel_"):
         t_id = data.split("_")[1]
-        run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s AND assigned_to=%s", (t_id, user_id), commit=True)
+        run_query("UPDATE map_tasks SET status='AVAILABLE', assigned_to=NULL WHERE id=%s", (t_id,), commit=True)
         bot.edit_message_text("❌ <b>Operation Aborted.</b> The task has been successfully re-queued to the grid.", user_id, call.message.message_id, parse_mode="HTML")
 
     elif data == "adm_panel_settings" and is_admin(user_id):
@@ -1341,6 +1368,23 @@ def callback_query(call):
     elif data == "admin_back" and is_admin(user_id):
         bot.edit_message_text("🛠️ <b>EXECUTIVE DASHBOARD</b>\nPlease select a category:", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=admin_markup(user_id))
 
+    # 🔥 NEW: BAN SYSTEM BUTTON ACTIONS
+    elif data == "admin_ban_user" and is_admin(user_id):
+        user_states[user_id] = {'state': 'admin_wait_ban_uid'}
+        markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
+        bot.edit_message_text("🚫 <b>BAN / UNBAN USER</b>\n\n👉 Kripya User ka <b>Telegram ID</b> bhejein jise aap Ban ya Unban karna chahte hain:", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        
+    elif data == "admin_banned_list" and is_admin(user_id):
+        records = run_query("SELECT user_id, username FROM users WHERE status='BANNED'", fetch='all')
+        markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
+        if not records:
+            bot.edit_message_text("📋 <b>BANNED USERS LIST</b>\n\nKoi bhi user ban nahi hai.", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        else:
+            msg = "📋 <b>BANNED USERS LIST:</b>\n━━━━━━━━━━━━━━━━━━━\n"
+            for r in records:
+                msg += f"👤 {r[1]} | <code>{r[0]}</code>\n"
+            bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+
     # PENDING QUEUE REVIEWS
     elif data == "review_pend_gmail" and is_admin(user_id):
         task = run_query("SELECT id, assigned_to, gmail, password, ss_file_id FROM new_gmail_tasks WHERE status='SUBMITTED' LIMIT 1", fetch='one')
@@ -1409,7 +1453,7 @@ def callback_query(call):
         markup.row(InlineKeyboardButton("📦 View Current Stock", callback_data="ngm_view_stock"), InlineKeyboardButton("🛠️ Delete Task (ID)", callback_data="ngm_manage_id"))
         markup.row(InlineKeyboardButton("🗑️ Delete ALL Gmails", callback_data="ngm_delete_all"))
         markup.row(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
-        bot.edit_message_text(f"📧 <b>GMAIL MANAGEMENT PANEL</b>\n━━━━━━━━━━━━━━━━━━━\nAssets in Stock: <b>{avail}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        bot.edit_message_text(f"📧 <b>GMAIL MANAGEMENT PANEL</b>\n━━━━━━━━━━━━━━━━━━━\nAssets in Stock: <b>0</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
 
     elif data == "ngm_add_single" and is_admin(user_id):
         user_states[user_id] = {'state': 'admin_ngm_add_single'}
@@ -1774,5 +1818,5 @@ def callback_query(call):
 if __name__ == "__main__":
     try: bot.remove_webhook()
     except Exception as e: pass
-    print("🤖 Anti-Loop VIP System Online. Running Infinity Polling...")
+    print("🤖 VIP System Online. Running Infinity Polling...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
