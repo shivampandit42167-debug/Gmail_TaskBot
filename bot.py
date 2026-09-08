@@ -1,4 +1,4 @@
-import telebot
+port telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 import psycopg2
 from psycopg2 import pool
