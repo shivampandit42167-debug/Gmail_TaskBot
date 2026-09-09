@@ -918,7 +918,7 @@ def handle_all_messages(message):
             deduct_balance(user_id, val_inr, f"Pending {meth} Withdraw ({val})")
             
             pid = run_query("INSERT INTO pending_withdraws (user_id, method, address, amount) VALUES (%s, %s, %s, %s) RETURNING id", (user_id, meth, text.strip(), val), fetch='id', commit=True)
-            bot.send_message(user_id, "✅ <b>Disbursement Request Logged!</b>\nYour transaction will be processed post administrative clearance.", parse_mode="HTML", reply_markup=main_menu(user_id))
+            bot.send_message(user_id, "✅ <b>Withdraw Request Logged!</b>\nYour transaction will be processed post administrative clearance Wait For 6-12hrs Admin Clear.", parse_mode="HTML", reply_markup=main_menu(user_id))
             
             markup = InlineKeyboardMarkup()
             markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"apprw_{pid}"))
