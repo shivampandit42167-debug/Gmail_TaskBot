@@ -155,7 +155,6 @@ init_db()
 # TIME FORMATTER & BACKGROUND WORKERS
 # ==========================================
 def time_left_str(auto_approve_time):
-    """Calculates exactly how much time is left based on the specifically saved task timer."""
     if not auto_approve_time: return "N/A"
     now = datetime.datetime.now()
     if now >= auto_approve_time: return "Ready To Approve 🟢"
@@ -167,11 +166,9 @@ def time_left_str(auto_approve_time):
     return f"{hours}h {mins}m"
 
 def auto_approve_worker():
-    """Smart Background Checker: Checks only tasks where is_checked=TRUE and NOW() is past auto_approve_time"""
     while True:
         time.sleep(45)
         try:
-            # 1. NEW GMAIL
             n_tasks = run_query("SELECT id, assigned_to, reward_amt, admin_chat_id, admin_msg_id, gmail FROM new_gmail_tasks WHERE is_checked=TRUE AND status IN ('SUBMITTED', 'CHECKED') AND NOW() >= auto_approve_time", fetch='all')
             if n_tasks:
                 for t in n_tasks:
@@ -186,7 +183,6 @@ def auto_approve_worker():
                         bot.send_message(OWNER_ID, f"⚡ <b>AUTO-APPROVE TRIGGERED</b>\nTask ID: {tid} for user {uid} automatically approved after time limit.\n📧 Gmail: {t_gmail}", parse_mode="HTML")
                     except: pass
             
-            # 2. MANUAL GMAIL (Create/Old)
             m_tasks = run_query("SELECT id, user_id, reward_amt, admin_chat_id, admin_msg_id, gmail, task_type FROM manual_gmail_tasks WHERE is_checked=TRUE AND status IN ('SUBMITTED', 'CHECKED') AND NOW() >= auto_approve_time", fetch='all')
             if m_tasks:
                 for t in m_tasks:
@@ -202,7 +198,6 @@ def auto_approve_worker():
                         try: bot.edit_message_text(f"✅ Approved (Auto Expired) | User: <code>{uid}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>", ach, amsg, parse_mode="HTML", reply_markup=None)
                         except: pass
 
-            # 3. MAP TASKS
             map_tasks = run_query("SELECT id, assigned_to, reward_amt, admin_chat_id, admin_msg_id FROM map_tasks WHERE is_checked=TRUE AND status IN ('SUBMITTED', 'CHECKED') AND NOW() >= auto_approve_time", fetch='all')
             if map_tasks:
                 for t in map_tasks:
@@ -221,7 +216,7 @@ def auto_approve_worker():
 threading.Thread(target=auto_approve_worker, daemon=True).start()
 
 def trigger_logout_warning(uid, gm, table_name, task_id):
-    time.sleep(600) # Wait 10 minutes before sending logout warning
+    time.sleep(600) 
     chk = run_query(f"SELECT status FROM {table_name} WHERE id=%s", (task_id,), fetch='one')
     if chk and chk[0] != 'REJECTED':
         msg = (f"⚠️ <b>Are You Sure You Logouted Gmail in Your Phone? If Not Logout Please Logout Gmail Immediately!</b>\n"
@@ -501,9 +496,11 @@ def handle_all_messages(message):
                 add_balance(t_user, refund_inr, f"Refund: {meth} Denied")
                 try: bot.send_message(t_user, f"❌ <b>Request Dropped.</b>\nYour payout via {meth} failed administrative clearance.\n💬 Reason: {text.strip()}\nFunds have been reversed to your portfolio.", parse_mode="HTML")
                 except: pass
+                
                 markup = InlineKeyboardMarkup()
                 markup.add(InlineKeyboardButton("⏭️ Next Pending Withdraw", callback_data="review_pend_wd"))
                 markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+                
                 try: 
                     amsg = state_data.get('admin_msg_id')
                     bot.edit_message_text(f"❌ Trans. Dropped for <code>{t_user}</code>\n💬 Reason: {text.strip()}", user_id, amsg, parse_mode="HTML", reply_markup=markup)
@@ -521,7 +518,7 @@ def handle_all_messages(message):
             
         elif state == 'admin_wait_submit_msg_old' and is_admin(user_id):
             update_setting('msg_submit_old_gmail', text.strip())
-            bot.send_message(user_id, "✅ <b>Old Gmail Submit Message Updated!</b>", parse_mode="HTML", reply_markup=get_settings_markup(user_id))
+            bot.send_message(user_id, "✅ <b>Old/Create Gmail Submit Message Updated!</b>", parse_mode="HTML", reply_markup=get_settings_markup(user_id))
             del user_states[user_id]
             return
 
@@ -578,8 +575,12 @@ def handle_all_messages(message):
             return
 
         elif state == 'admin_wait_deduct_uid' and is_admin(user_id):
-            try: user_states[user_id] = {'state': 'admin_wait_deduct_amt', 'uid': int(text.strip())}; bot.send_message(user_id, "👉 Provide deduction amount in ₹:")
-            except: del user_states[user_id]; bot.send_message(user_id, "Invalid format.", reply_markup=admin_markup(user_id))
+            try: 
+                user_states[user_id] = {'state': 'admin_wait_deduct_amt', 'uid': int(text.strip())}
+                bot.send_message(user_id, "👉 Provide deduction amount in ₹:")
+            except: 
+                del user_states[user_id]
+                bot.send_message(user_id, "Invalid format.", reply_markup=admin_markup(user_id))
             return
             
         elif state == 'admin_wait_deduct_amt' and is_admin(user_id):
@@ -875,6 +876,61 @@ def handle_all_messages(message):
                 bot.send_message(user_id, "❌ Invalid format. Please upload a clear <b>Screenshot (Photo)</b>.")
                 return
 
+        elif state == 'withdraw_amount':
+            try:
+                val = float(text.strip())
+                bal = get_balance(user_id)
+                meth = state_data['method']
+                min_upi = float(get_setting('min_upi'))
+                min_usdt = float(get_setting('min_usdt'))
+                
+                if meth == "🏦 UPI":
+                    if val < min_upi:
+                        bot.send_message(user_id, f"❌ Minimum withdrawal for UPI is ₹{min_upi}", reply_markup=main_menu(user_id))
+                        del user_states[user_id]
+                        return
+                    if val > bal:
+                        bot.send_message(user_id, f"❌ Insufficient balance! Your balance: ₹{bal:.2f}", reply_markup=main_menu(user_id))
+                        del user_states[user_id]
+                        return
+                else:
+                    if val < min_usdt:
+                        bot.send_message(user_id, f"❌ Minimum withdrawal for USDT is ${min_usdt}", reply_markup=main_menu(user_id))
+                        del user_states[user_id]
+                        return
+                    if (val * USDT_TO_INR_RATE) > bal:
+                        bot.send_message(user_id, f"❌ Insufficient balance! Your balance: ₹{bal:.2f}", reply_markup=main_menu(user_id))
+                        del user_states[user_id]
+                        return
+                        
+                user_states[user_id]['amt'] = val
+                user_states[user_id]['state'] = 'withdraw_address'
+                bot.send_message(user_id, f"✅ Amount: {val}\nPlease provide your precise <b>UPI/BP20 Destination Address</b>:", parse_mode="HTML")
+            except ValueError:
+                bot.send_message(user_id, "❌ Please enter a valid number.", reply_markup=main_menu(user_id))
+                del user_states[user_id]
+            return
+
+        elif state == 'withdraw_address':
+            meth = state_data['method']
+            val = state_data['amt']
+            val_inr = val if meth == "🏦 UPI" else val * USDT_TO_INR_RATE
+            deduct_balance(user_id, val_inr, f"Pending {meth} Withdraw ({val})")
+            
+            pid = run_query("INSERT INTO pending_withdraws (user_id, method, address, amount) VALUES (%s, %s, %s, %s) RETURNING id", (user_id, meth, text.strip(), val), fetch='id', commit=True)
+            bot.send_message(user_id, "✅ <b>Disbursement Request Logged!</b>\nYour transaction will be processed post administrative clearance.", parse_mode="HTML", reply_markup=main_menu(user_id))
+            
+            markup = InlineKeyboardMarkup()
+            markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"apprw_{pid}"))
+            markup.row(InlineKeyboardButton("❌ Quick Reject", callback_data=f"rejwd_{pid}"), InlineKeyboardButton("✍️ Custom Reject", callback_data=f"custrejwd_{pid}"))
+            
+            bot.send_message(OWNER_ID, f"🔔 <b>PAYOUT REQUEST</b>\n👤 <code>{user_id}</code>\n🏦 {meth}\n💰 {val}\n📌 <code>{text.strip()}</code>", parse_mode="HTML", reply_markup=markup)
+            del user_states[user_id]
+            return
+
+    # ==========================================
+    # USER MENUS (TEXT MATCHES)
+    # ==========================================
     if message.content_type == 'text':
         if text == "👤 My Profile":
             bid = run_query("SELECT bot_id FROM users WHERE user_id=%s", (user_id,), fetch='one')
@@ -997,25 +1053,6 @@ def handle_all_messages(message):
             bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
             user_states[user_id] = {'state': 'wait_bet_amt'}
 
-        elif user_id in user_states and user_states[user_id].get('state') == 'wait_bet_amt':
-            try:
-                amt = float(text)
-                bal = get_balance(user_id)
-                if amt <= 0 or amt > bal:
-                    bot.send_message(user_id, f"❌ <b>Invalid Amount!</b>\nYour current balance is: ₹{bal:.2f}", parse_mode="HTML", reply_markup=main_menu(user_id))
-                    del user_states[user_id]
-                else:
-                    user_states[user_id]['bet_amt'] = amt
-                    user_states[user_id]['state'] = 'wait_bet_side'
-                    msg = f"💸 <b>Betting Amount:</b> ₹{amt}\n\n👇 Select your choice:"
-                    markup = InlineKeyboardMarkup()
-                    markup.row(InlineKeyboardButton("🔼 BIG (4, 5, 6)", callback_data="betplay_big"), InlineKeyboardButton("🔽 SMALL (1, 2, 3)", callback_data="betplay_small"))
-                    markup.row(InlineKeyboardButton("🔙 Cancel", callback_data="back_to_main"))
-                    bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
-            except ValueError:
-                bot.send_message(user_id, "❌ Please enter a valid number.", reply_markup=main_menu(user_id))
-                del user_states[user_id]
-
         elif text == "💰 Wallet":
             balance_inr = get_balance(user_id)
             msg = (f"💼 <b>ACCOUNT DASHBOARD</b>\n━━━━━━━━━━━━━━━━━━━\n"
@@ -1070,6 +1107,7 @@ def callback_query(call):
         bot.answer_callback_query(call.id, "❌ Account Banned! Aap bot use nahi kar sakte.", show_alert=True)
         return
 
+    # 🔥 ULTRA FAST UX: 0 Latency
     if not data.startswith("ngmotp_"): 
         try: bot.answer_callback_query(call.id)
         except: pass
@@ -1264,36 +1302,27 @@ def callback_query(call):
         is_snd = t_data[0]
         amt = t_data[1] if t_data[1] else float(get_setting('reward_newgmail_single'))
         auto_time = t_data[2]
-        
         t_gmail = extract_gmail(call.message)
         
-        # 🔥 INSTANT APPROVE LOGIC IF TIME IS ALREADY OVER
         if auto_time and datetime.datetime.now() >= auto_time:
             add_balance(tgt, amt, f"New Gmail Task Approved (ID: {tid})")
             run_query("UPDATE new_gmail_tasks SET status='COMPLETED', is_checked=TRUE WHERE id=%s", (tid,), commit=True)
             try: bot.send_message(tgt, f"🎉 <b>Gmail Task Approved!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💰 ₹{amt} added.", parse_mode="HTML")
             except: pass
-            
-            try: bot.send_message(OWNER_ID, f"⚡ <b>INSTANT AUTO-APPROVE TRIGGERED!</b>\nTime was already over for Task ID {tid}.\nUser: {tgt} got paid ₹{amt}.", parse_mode="HTML")
-            except: pass
-            
             markup = InlineKeyboardMarkup().add(InlineKeyboardButton("⏭️ Next Pending Task", callback_data=f"review_pend_gmail_{tid}"))
             try: bot.edit_message_caption(f"✅ Approved (Instantly) | User: <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
             except: pass
             return
 
         run_query("UPDATE new_gmail_tasks SET status='CHECKED', is_checked=TRUE WHERE id=%s", (tid,), commit=True)
-        
         try: hrs = float(get_setting('auto_approve_hours'))
         except: hrs = 54.0
-        
         markup = InlineKeyboardMarkup()
         if not is_snd: markup.row(InlineKeyboardButton("📤 Sended To Buyer", callback_data=f"ngmbuyer_{tid}_{tgt}"))
         markup.row(InlineKeyboardButton(f"✅ Appr (₹{amt})", callback_data=f"ngmappr_{amt}_{tid}_{tgt}"))
         markup.row(InlineKeyboardButton("❌ Quick Reject", callback_data=f"ngmrej_{tid}_{tgt}"), InlineKeyboardButton("✍️ Custom Reject", callback_data=f"ngmcustrej_{tid}_{tgt}"))
         markup.row(InlineKeyboardButton("⏭️ Next Pending Task", callback_data=f"review_pend_gmail_{tid}"))
         markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
-        
         try: bot.edit_message_caption(f"👁️ STATUS: CHECKED (Auto-Approve {hrs}H) | User: <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
         except: pass
 
@@ -1307,10 +1336,8 @@ def callback_query(call):
         add_balance(tgt, amt, f"New Gmail Task Approved (ID: {tid})")
         run_query("UPDATE new_gmail_tasks SET status='COMPLETED' WHERE id=%s", (tid,), commit=True)
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('GMAIL', 'APPROVE')", commit=True)
-        
         try: bot.send_message(tgt, f"🎉 <b>Gmail Task Approved!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💰 ₹{amt} added.", parse_mode="HTML")
         except: pass
-        
         markup = InlineKeyboardMarkup().add(InlineKeyboardButton("⏭️ Next Pending Task", callback_data=f"review_pend_gmail_{tid}"))
         try: bot.edit_message_caption(f"✅ Approved (₹{amt}) | User: <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
         except: pass
@@ -1372,7 +1399,6 @@ def callback_query(call):
         t_u = run_query("SELECT user_id, gmail, is_checked FROM manual_gmail_tasks WHERE id=%s", (tid,), fetch='one')
         if not t_u: return
         tgt, t_gmail, is_chk = t_u
-        
         run_query("UPDATE manual_gmail_tasks SET sended_buyer=TRUE WHERE id=%s", (tid,), commit=True)
         try: bot.send_message(tgt, f"🔔 <b>STATUS UPDATE</b>\nGmail Is Under Processing. Wait for completion, then balance will be automatically added.\n📧 <b>Gmail:</b> <code>{t_gmail}</code>", parse_mode="HTML")
         except: pass
@@ -1394,13 +1420,10 @@ def callback_query(call):
         if not t_u: return
         tgt, t_gmail, is_snd, auto_time, amt, ttype = t_u
         
-        # 🔥 INSTANT APPROVE LOGIC IF TIME IS ALREADY OVER
         if auto_time and datetime.datetime.now() >= auto_time:
             add_balance(tgt, amt, f"{ttype} Gmail Approved (ID: {tid})")
             run_query("UPDATE manual_gmail_tasks SET status='COMPLETED', is_checked=TRUE WHERE id=%s", (tid,), commit=True)
             try: bot.send_message(tgt, f"🎉 <b>{ttype} Task Approved!</b>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💰 ₹{amt} added.", parse_mode="HTML")
-            except: pass
-            try: bot.send_message(OWNER_ID, f"⚡ <b>INSTANT AUTO-APPROVE TRIGGERED!</b>\nTime was already over for {ttype} Task ID {tid}.\nUser: {tgt} got paid ₹{amt}.", parse_mode="HTML")
             except: pass
             markup = InlineKeyboardMarkup().add(InlineKeyboardButton("⏭️ Next Pending Task", callback_data=f"review_pend_man_{tid}"))
             try: bot.edit_message_caption(f"✅ Approved (Instantly) | User: <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
@@ -1412,7 +1435,6 @@ def callback_query(call):
         run_query("UPDATE manual_gmail_tasks SET status='CHECKED', is_checked=TRUE WHERE id=%s", (tid,), commit=True)
         try: hrs = float(get_setting('auto_approve_hours'))
         except: hrs = 54.0
-        
         markup = InlineKeyboardMarkup()
         if not is_snd: markup.row(InlineKeyboardButton("📤 Sended To Buyer", callback_data=f"manbuyer_{tid}"))
         markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"manappr_{tid}"))
@@ -1432,7 +1454,6 @@ def callback_query(call):
         rec = run_query("SELECT user_id, reward_amt, gmail, task_type FROM manual_gmail_tasks WHERE id=%s", (tid,), fetch='one')
         if not rec: return
         tgt, amt, t_gmail, ttype = rec
-        
         add_balance(tgt, amt, f"{ttype} Gmail Approved (ID: {tid})")
         run_query("UPDATE manual_gmail_tasks SET status='COMPLETED' WHERE id=%s", (tid,), commit=True)
         
@@ -1488,12 +1509,14 @@ def callback_query(call):
             try: bot.edit_message_text(f"❌ Denied for <code>{tgt}</code>\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n💬 Reason: <b>{r_txt}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
             except: pass
 
+    # ==========================================
+    # ADMIN PANEL: MAP REVIEW ACTIONS
+    # ==========================================
     elif data == "map_agree":
         with get_user_lock(user_id):
             if get_setting('map_review_task') == 'OFF' and not is_admin(user_id):
                 bot.send_message(user_id, "❌ Bot Option Is Now Closed By Admin", parse_mode="HTML")
                 return
-            
             chk = run_query("SELECT id, link, review_text FROM map_tasks WHERE assigned_to=%s AND status='PENDING'", (user_id,), fetch='one')
             if chk:
                 t_id, t_link, t_txt = chk
@@ -1503,17 +1526,7 @@ def callback_query(call):
                 bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
                 return
 
-            task = run_query('''
-                UPDATE map_tasks SET status='PENDING', assigned_to=%s 
-                WHERE id = (
-                    SELECT id FROM map_tasks 
-                    WHERE status='AVAILABLE' 
-                    ORDER BY id ASC
-                    LIMIT 1 FOR UPDATE SKIP LOCKED
-                ) 
-                RETURNING id, link, review_text
-            ''', (user_id,), fetch='one', commit=True)
-            
+            task = run_query('''UPDATE map_tasks SET status='PENDING', assigned_to=%s WHERE id = (SELECT id FROM map_tasks WHERE status='AVAILABLE' ORDER BY id ASC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id, link, review_text''', (user_id,), fetch='one', commit=True)
             if not task:
                 bot.send_message(user_id, "🚫 We are currently out of Unique Review Tasks for you!", parse_mode="HTML")
             else:
@@ -1550,8 +1563,6 @@ def callback_query(call):
             run_query("UPDATE map_tasks SET status='COMPLETED', is_checked=TRUE WHERE id=%s", (t_id,), commit=True)
             try: bot.send_message(tgt, f"🎉 <b>Validation Complete!</b>\n₹{amt} has been allocated to your account.", parse_mode="HTML")
             except: pass
-            try: bot.send_message(OWNER_ID, f"⚡ <b>INSTANT AUTO-APPROVE TRIGGERED!</b>\nMap Task ID: {t_id} for user {tgt} automatically approved.", parse_mode="HTML")
-            except: pass
             markup = InlineKeyboardMarkup().add(InlineKeyboardButton("⏭️ Next Pending Task", callback_data=f"review_pend_map_{t_id}"))
             try: bot.edit_message_caption(f"✅ Clearance Granted Instantly for <code>{tgt}</code>\n🗺️ Map Task", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
             except: pass
@@ -1572,7 +1583,6 @@ def callback_query(call):
         t_data = run_query("SELECT assigned_to, reward_amt FROM map_tasks WHERE id=%s", (t_id,), fetch='one')
         if not t_data: return
         tgt, amt = t_data
-        
         add_balance(tgt, amt, "Map Review Approved")
         run_query("UPDATE map_tasks SET status='COMPLETED' WHERE id=%s", (t_id,), commit=True)
         run_query("INSERT INTO task_logs (task_type, action) VALUES ('MAP', 'APPROVE')", commit=True)
@@ -1599,23 +1609,21 @@ def callback_query(call):
         try: bot.edit_message_caption(f"❌ Clearance Denied (Re-queued) for <code>{tgt}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
         except: pass
 
+    # ==========================================
+    # DASHBOARD AND ADMIN CORE ACTIONS
+    # ==========================================
     elif data == "admin_auto_queue" and is_admin(user_id):
         msg = "⏱️ <b>AUTO-APPROVE QUEUE</b>\n━━━━━━━━━━━━━━━━━━━\n"
-        
         n_tasks = run_query("SELECT id, status, auto_approve_time FROM new_gmail_tasks WHERE status IN ('SUBMITTED', 'CHECKED') ORDER BY auto_approve_time ASC LIMIT 7", fetch='all')
         if n_tasks:
             for r in n_tasks: msg += f"📧 <b>New GM (ID:{r[0]})</b> | Status: {r[1]}\n⏳ Left: {time_left_str(r[2])}\n\n"
-        
         m_tasks = run_query("SELECT id, task_type, status, auto_approve_time FROM manual_gmail_tasks WHERE status IN ('SUBMITTED', 'CHECKED') ORDER BY auto_approve_time ASC LIMIT 7", fetch='all')
         if m_tasks:
             for r in m_tasks: msg += f"📧 <b>{r[1]} GM (ID:{r[0]})</b> | Status: {r[2]}\n⏳ Left: {time_left_str(r[3])}\n\n"
-        
         map_tasks = run_query("SELECT id, status, auto_approve_time FROM map_tasks WHERE status IN ('SUBMITTED', 'CHECKED') ORDER BY auto_approve_time ASC LIMIT 7", fetch='all')
         if map_tasks:
             for r in map_tasks: msg += f"🗺️ <b>Map Task (ID:{r[0]})</b> | Status: {r[1]}\n⏳ Left: {time_left_str(r[2])}\n\n"
-        
         if len(msg) < 50: msg += "<i>Queue is completely empty!</i>"
-        
         markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Back to Main Panel", callback_data="admin_back"))
         bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
 
@@ -2063,8 +2071,58 @@ def callback_query(call):
         markup.row(InlineKeyboardButton("🔙 Back to Settings", callback_data="adm_panel_settings"))
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
 
+    elif data.startswith("apprw_") and is_admin(user_id): 
+        pid = int(data.split("_")[1])
+        req = run_query("SELECT user_id, amount, method, address FROM pending_withdraws WHERE id=%s", (pid,), fetch='one')
+        if req:
+            t_user, amt, meth, addr = req
+            date_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            insert_check = run_query("INSERT INTO approved_withdraws (user_id, method, address, amount, date) VALUES (%s, %s, %s, %s, %s) RETURNING id", 
+                                     (int(t_user), str(meth), str(addr), float(amt), str(date_now)), fetch='id', commit=True)
+            if insert_check:
+                curr_symbol = "₹" if meth == "🏦 UPI" else "$"
+                try: bot.send_message(t_user, f"🎉 <b>FUNDS DISBURSED!</b>\nYour request for {curr_symbol}{amt} via {meth} has been officially fulfilled.", parse_mode="HTML")
+                except: pass
+                
+                markup = InlineKeyboardMarkup()
+                markup.add(InlineKeyboardButton("⏭️ Next Pending Withdraw", callback_data="review_pend_wd"))
+                markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+                try: bot.edit_message_text(f"✅ Asset Routed for <code>{t_user}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+                except: pass
+                run_query("DELETE FROM pending_withdraws WHERE id=%s", (pid,), commit=True)
+        else:
+            bot.answer_callback_query(call.id, "Already Processed!", show_alert=True)
+
+    elif data.startswith("rejwd_") and is_admin(user_id):
+        pid = int(data.split("_")[1])
+        req = run_query("SELECT user_id, amount, method FROM pending_withdraws WHERE id=%s", (pid,), fetch='one')
+        if req:
+            t_user, amt, meth = req
+            refund_inr = amt if meth == "🏦 UPI" else amt * USDT_TO_INR_RATE
+            add_balance(t_user, refund_inr, f"Refund: {meth} Denied")
+            try: bot.send_message(t_user, f"❌ <b>Request Dropped.</b>\nYour payout via {meth} failed administrative clearance. Funds have been reversed to your portfolio.", parse_mode="HTML")
+            except: pass
+            
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("⏭️ Next Pending Withdraw", callback_data="review_pend_wd"))
+            markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+            try: bot.edit_message_text(f"❌ Trans. Dropped for <code>{t_user}</code>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+            except: pass
+            run_query("DELETE FROM pending_withdraws WHERE id=%s", (pid,), commit=True)
+        else:
+            bot.answer_callback_query(call.id, "Already Processed!", show_alert=True)
+
+    elif data.startswith("custrejwd_") and is_admin(user_id):
+        pid = int(data.split("_")[1])
+        req = run_query("SELECT user_id FROM pending_withdraws WHERE id=%s", (pid,), fetch='one')
+        if req:
+            user_states[user_id] = {'state': 'admin_wd_reject_reason', 'pid': pid, 'admin_msg_id': call.message.message_id}
+            bot.send_message(user_id, "✍️ Please specify the reason for rejecting this withdrawal:", reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Cancel", callback_data="adm_panel_dash")))
+        else:
+            bot.answer_callback_query(call.id, "Already Processed!", show_alert=True)
+
 if __name__ == "__main__":
     try: bot.remove_webhook()
     except Exception as e: pass
-    print("🤖 Ultra Pro Max System Online. Perfect Speed Applied...")
+    print("🤖 Ultra Pro Max VIP System Running...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
