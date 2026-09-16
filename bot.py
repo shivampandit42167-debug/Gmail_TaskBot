@@ -192,7 +192,6 @@ init_db()
 # 🚀 CORE HELPER: MULTI-MESSAGE SYNC SYSTEM
 # ==========================================
 def edit_msg_safe(chat_id, msg_id, text, markup=None):
-    """Safely edits message whether it is text or a photo caption. Guaranteed not to crash the bot."""
     if not msg_id: return
     try: 
         bot.edit_message_caption(caption=text, chat_id=chat_id, message_id=msg_id, parse_mode="HTML", reply_markup=markup)
@@ -203,7 +202,6 @@ def edit_msg_safe(chat_id, msg_id, text, markup=None):
             pass
 
 def update_both(current_chat, current_msg, ach, amsg, text, dash_markup, orig_markup, is_photo=True):
-    """Synchronize original and dashboard messages instantly"""
     if str(current_msg) == str(amsg):
         edit_msg_safe(current_chat, current_msg, text, orig_markup)
     else:
@@ -212,7 +210,6 @@ def update_both(current_chat, current_msg, ach, amsg, text, dash_markup, orig_ma
             edit_msg_safe(ach, amsg, text, orig_markup)
 
 def sync_admin_messages(call, db_table, tid, caption_text, dash_markup, orig_markup=None):
-    """Fetches exact message IDs and locks the UI across both chats."""
     try:
         t_data = run_query(f"SELECT admin_chat_id, admin_msg_id FROM {db_table} WHERE id=%s", (tid,), fetch='one')
         ach, amsg = t_data if t_data else (call.message.chat.id, None)
@@ -563,6 +560,84 @@ def handle_all_messages(message):
                 bot.send_message(user_id, f"✅ Reward for {key} updated to ₹{val}", reply_markup=admin_markup(user_id))
             except ValueError:
                 bot.send_message(user_id, "❌ Please enter a valid number.", reply_markup=admin_markup(user_id))
+            del user_states[user_id]
+            return
+
+        # ==========================================
+        # 🔥 GMAIL & MAP STOCK ENTRY STATES
+        # ==========================================
+        elif state == 'ngm_wait_single' and is_admin(user_id):
+            try:
+                g_mail, g_pass = text.split('|')
+                run_query("INSERT INTO new_gmail_tasks (gmail, password) VALUES (%s, %s)", (g_mail.strip(), g_pass.strip()), commit=True)
+                bot.send_message(user_id, f"✅ Successfully Added: <code>{g_mail.strip()}</code>", parse_mode="HTML", reply_markup=admin_markup(user_id))
+            except:
+                bot.send_message(user_id, "❌ Invalid format. Use: `Gmail | Password`", parse_mode="Markdown")
+            del user_states[user_id]
+            return
+
+        elif state == 'ngm_wait_bulk_pass' and is_admin(user_id):
+            user_states[user_id] = {'state': 'ngm_wait_bulk_gmails', 'pass': text.strip()}
+            bot.send_message(user_id, f"✅ Password Saved: <code>{text.strip()}</code>\n\n👉 <b>Step 2:</b> Now send all Gmails, each on a new line:", parse_mode="HTML")
+            return
+
+        elif state == 'ngm_wait_bulk_gmails' and is_admin(user_id):
+            g_pass = state_data['pass']
+            gmails = text.strip().split('\n')
+            count = 0
+            for g in gmails:
+                if g.strip():
+                    run_query("INSERT INTO new_gmail_tasks (gmail, password) VALUES (%s, %s)", (g.strip(), g_pass), commit=True)
+                    count += 1
+            bot.send_message(user_id, f"✅ Successfully added {count} Gmail tasks to stock!", reply_markup=admin_markup(user_id))
+            del user_states[user_id]
+            return
+
+        elif state == 'ngm_wait_del_id' and is_admin(user_id):
+            try:
+                tid = int(text.strip())
+                run_query("DELETE FROM new_gmail_tasks WHERE id=%s", (tid,), commit=True)
+                bot.send_message(user_id, f"✅ Task ID {tid} deleted successfully.", reply_markup=admin_markup(user_id))
+            except:
+                bot.send_message(user_id, "❌ Invalid ID format.")
+            del user_states[user_id]
+            return
+
+        elif state == 'map_wait_single' and is_admin(user_id):
+            try:
+                m_link, m_rev = text.split('|', 1)
+                run_query("INSERT INTO map_tasks (link, review_text) VALUES (%s, %s)", (m_link.strip(), m_rev.strip()), commit=True)
+                bot.send_message(user_id, "✅ Map task added successfully!", reply_markup=admin_markup(user_id))
+            except:
+                bot.send_message(user_id, "❌ Invalid format. Use: `Link | Review Text`", parse_mode="Markdown")
+            del user_states[user_id]
+            return
+
+        elif state == 'map_wait_bulk' and is_admin(user_id):
+            lines = text.strip().split('\n')
+            count = 0
+            for line in lines:
+                if '|' in line:
+                    m_link, m_rev = line.split('|', 1)
+                    run_query("INSERT INTO map_tasks (link, review_text) VALUES (%s, %s)", (m_link.strip(), m_rev.strip()), commit=True)
+                    count += 1
+            bot.send_message(user_id, f"✅ Successfully added {count} Map tasks to stock!", reply_markup=admin_markup(user_id))
+            del user_states[user_id]
+            return
+
+        elif state == 'map_wait_del_id' and is_admin(user_id):
+            try:
+                tid = int(text.strip())
+                run_query("DELETE FROM map_tasks WHERE id=%s", (tid,), commit=True)
+                bot.send_message(user_id, f"✅ Map Task ID {tid} deleted.", reply_markup=admin_markup(user_id))
+            except:
+                bot.send_message(user_id, "❌ Invalid ID.")
+            del user_states[user_id]
+            return
+
+        elif state == 'map_wait_rules' and is_admin(user_id):
+            update_setting('map_rules', text.strip())
+            bot.send_message(user_id, "✅ Map rules updated successfully!", reply_markup=admin_markup(user_id))
             del user_states[user_id]
             return
 
@@ -1167,7 +1242,7 @@ def handle_all_messages(message):
 
         elif text == "📧 Get New Gmail Task":
             if get_setting('new_gmail_task') == 'OFF' and not is_admin(user_id): 
-                bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
+                bot.send_message(user_id, "❌ <b>This Option Closed By Admin Raka</b>", parse_mode="HTML")
                 return
             free_expired_gmail_tasks()
             
@@ -1199,7 +1274,7 @@ def handle_all_messages(message):
 
         elif text == "📧 Create Gmail Task":
             if get_setting('create_gmail_task') == 'OFF' and not is_admin(user_id): 
-                bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
+                bot.send_message(user_id, "❌ <b>This Option Closed By Admin Raka</b>", parse_mode="HTML")
                 return
             current_pass = get_setting('gmail_password')
             reward = get_setting('reward_gmail')
@@ -1212,7 +1287,7 @@ def handle_all_messages(message):
 
         elif text == "📧 Sell Old Gmail Task":
             if get_setting('old_gmail_task') == 'OFF' and not is_admin(user_id): 
-                bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
+                bot.send_message(user_id, "❌ <b>This Option Closed By Admin Raka</b>", parse_mode="HTML")
                 return
             markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🔙 Return to Main Menu", callback_data="back_to_main"))
             r_old = get_setting('reward_oldgmail')
@@ -1225,7 +1300,7 @@ def handle_all_messages(message):
 
         elif text == "🗺️ Map Review Task":
             if get_setting('map_review_task') == 'OFF' and not is_admin(user_id): 
-                bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
+                bot.send_message(user_id, "❌ <b>This Option Closed By Admin Raka</b>", parse_mode="HTML")
                 return
             rules = get_setting('map_rules')
             reward = get_setting('reward_map')
@@ -1235,7 +1310,7 @@ def handle_all_messages(message):
 
         elif text == "🎲 Bet And Earn":
             if get_setting('vis_bet') == 'OFF' and not is_admin(user_id): 
-                bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
+                bot.send_message(user_id, "❌ <b>This Option Closed By Admin Raka</b>", parse_mode="HTML")
                 return
             msg = ("🎲 <b>BET AND EARN</b> 🎲\n━━━━━━━━━━━━━━━━━━━\n\n"
                    "⚠️ <b>RULES:</b>\n"
@@ -1285,7 +1360,7 @@ def handle_all_messages(message):
 
         elif text == "💸 Withdraw":
             if get_setting('withdraw') == 'OFF' and not is_admin(user_id): 
-                bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
+                bot.send_message(user_id, "❌ <b>This Option Closed By Admin Raka</b>", parse_mode="HTML")
                 return
             markup = ReplyKeyboardMarkup(resize_keyboard=True)
             markup.row(KeyboardButton("🏦 UPI"), KeyboardButton("🪙 USDT"))
@@ -1332,11 +1407,110 @@ def callback_query(call):
         except: pass
 
     # ==========================================
+    # 🔥 ADMIN FIXES: TOGGLES, REWARDS & PANELS
+    # ==========================================
+    
+    # 1. VISIBILITY TOGGLES (User keyboard buttons hide/show)
+    if data == "admin_vis_toggles" and is_admin(user_id):
+        markup = InlineKeyboardMarkup()
+        for key in ['vis_create_gmail', 'vis_new_gmail', 'vis_old_gmail', 'vis_map', 'vis_withdraw', 'vis_bulk_gmail', 'vis_bet']:
+            val = get_setting(key)
+            markup.add(InlineKeyboardButton(f"{key.replace('vis_', '').upper()} : {val}", callback_data=f"tglvis_{key}"))
+        markup.add(InlineKeyboardButton("🔙 Back", callback_data="adm_panel_settings"))
+        bot.edit_message_text("👁️ <b>VISIBILITY TOGGLES</b>\nHide or Show buttons on User Keyboard:", user_id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        return
+
+    elif data.startswith("tglvis_") and is_admin(user_id):
+        key = data.replace("tglvis_", "")
+        current = get_setting(key)
+        update_setting(key, "OFF" if current == "ON" else "ON")
+        call.data = "admin_vis_toggles"
+        return callback_query(call)
+
+    # 2. STATUS TOGGLES (On/Off features with Admin Raka msg)
+    elif data == "admin_stat_toggles" and is_admin(user_id):
+        markup = InlineKeyboardMarkup()
+        for key in ['create_gmail_task', 'new_gmail_task', 'old_gmail_task', 'map_review_task', 'withdraw']:
+            val = get_setting(key)
+            markup.add(InlineKeyboardButton(f"{key.upper()} : {val}", callback_data=f"tglstat_{key}"))
+        markup.add(InlineKeyboardButton("🔙 Back", callback_data="adm_panel_settings"))
+        bot.edit_message_text("⛔ <b>STATUS TOGGLES</b>\nTurn ON/OFF functions (Sends Admin Raka closed msg):", user_id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        return
+
+    elif data.startswith("tglstat_") and is_admin(user_id):
+        key = data.replace("tglstat_", "")
+        current = get_setting(key)
+        update_setting(key, "OFF" if current == "ON" else "ON")
+        call.data = "admin_stat_toggles"
+        return callback_query(call)
+
+    # 3. SET TASK REWARDS MENU
+    elif data == "admin_reward_menu" and is_admin(user_id):
+        markup = InlineKeyboardMarkup()
+        for k in ['reward_gmail', 'reward_oldgmail', 'reward_map', 'reward_newgmail_single', 'reward_newgmail_bulk']:
+            markup.add(InlineKeyboardButton(f"{k} = ₹{get_setting(k)}", callback_data=f"set_rew_{k}"))
+        markup.add(InlineKeyboardButton("🔙 Back", callback_data="adm_panel_settings"))
+        bot.edit_message_text("💰 <b>SET TASK REWARDS</b>\nClick to change reward amounts:", user_id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        return
+
+    elif data.startswith("set_rew_") and is_admin(user_id):
+        key = data.replace("set_rew_", "")
+        user_states[user_id] = {'state': f'admin_set_{key}'}
+        bot.send_message(user_id, f"👉 Enter new reward amount for <b>{key}</b>:", parse_mode="HTML")
+        return
+
+    # 4. FIX SET MIN WITHDRAW
+    elif data == "set_min_upi" and is_admin(user_id):
+        user_states[user_id] = {'state': 'admin_set_min_upi'}
+        bot.send_message(user_id, "👉 Enter minimum <b>UPI</b> withdraw amount (₹):", parse_mode="HTML")
+        return
+    elif data == "set_min_usdt" and is_admin(user_id):
+        user_states[user_id] = {'state': 'admin_set_min_usdt'}
+        bot.send_message(user_id, "👉 Enter minimum <b>USDT</b> withdraw amount ($):", parse_mode="HTML")
+        return
+
+    # 5. GMAIL PANEL ACTIONS
+    elif data == "ngm_add_single" and is_admin(user_id):
+        user_states[user_id] = {'state': 'ngm_wait_single'}
+        bot.send_message(user_id, "👉 Send Gmail and Password formatted as `Gmail | Password`\nExample: `rohan@gmail.com | rohan123`", parse_mode="Markdown")
+        return
+    elif data == "ngm_add_bulk" and is_admin(user_id):
+        user_states[user_id] = {'state': 'ngm_wait_bulk_pass'}
+        bot.send_message(user_id, "👉 <b>Step 1:</b> Send the common <b>Password</b> that will be used for all the bulk Gmails:", parse_mode="HTML")
+        return
+    elif data == "ngm_manage_id" and is_admin(user_id):
+        user_states[user_id] = {'state': 'ngm_wait_del_id'}
+        bot.send_message(user_id, "👉 Send the Task ID you want to delete:")
+        return
+    elif data == "ngm_delete_all" and is_admin(user_id):
+        run_query("DELETE FROM new_gmail_tasks", commit=True)
+        bot.send_message(user_id, "✅ All New Gmail stock has been deleted!")
+        return
+
+    # 6. MAP PANEL ACTIONS
+    elif data == "map_add_single" and is_admin(user_id):
+        user_states[user_id] = {'state': 'map_wait_single'}
+        bot.send_message(user_id, "👉 Send Map Link and Review formatted as `Link | Review Text`\nExample: `https://maps.app.goo.gl/... | Nice place!`", parse_mode="Markdown")
+        return
+    elif data == "map_add_bulk" and is_admin(user_id):
+        user_states[user_id] = {'state': 'map_wait_bulk'}
+        bot.send_message(user_id, "👉 Send multiple map tasks, each on a new line formatted as `Link | Review Text`", parse_mode="Markdown")
+        return
+    elif data == "map_manage_task" and is_admin(user_id):
+        user_states[user_id] = {'state': 'map_wait_del_id'}
+        bot.send_message(user_id, "👉 Send the Map Task ID you want to delete:")
+        return
+    elif data == "map_edit_rules" and is_admin(user_id):
+        user_states[user_id] = {'state': 'map_wait_rules'}
+        bot.send_message(user_id, "👉 Send the new Global Rules for Map Task:")
+        return
+
+    # ==========================================
     # WALLET & WITHDRAW NEW INLINE HANDLERS
     # ==========================================
     if data == "req_withdraw":
         if get_setting('withdraw') == 'OFF' and not is_admin(user_id): 
-            bot.send_message(user_id, "❌ <b>Bot Option Is Now Closed By Admin</b>", parse_mode="HTML")
+            bot.send_message(user_id, "❌ <b>This Option Closed By Admin Raka</b>", parse_mode="HTML")
             return
         markup = ReplyKeyboardMarkup(resize_keyboard=True)
         markup.row(KeyboardButton("🏦 UPI"), KeyboardButton("🪙 USDT"))
