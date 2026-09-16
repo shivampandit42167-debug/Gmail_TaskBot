@@ -1506,6 +1506,159 @@ def callback_query(call):
         return
 
     # ==========================================
+    # 🔥 ADMIN DASHBOARD REVIEW QUEUE HANDLERS
+    # ==========================================
+
+    elif data.startswith("review_pend_gmail") and is_admin(user_id):
+        parts = data.split("_")
+        last_id = int(parts[3]) if len(parts) > 3 else 0
+        
+        # Agla pending task find karo
+        task = run_query("SELECT id, assigned_to, reward_amt, gmail, password, ss_file_id, is_checked, auto_approve_time, sended_buyer FROM new_gmail_tasks WHERE status IN ('SUBMITTED', 'CHECKED') AND id > %s ORDER BY id ASC LIMIT 1", (last_id,), fetch='one')
+        if not task: # Agar last task tha, toh shuru se check karo
+            task = run_query("SELECT id, assigned_to, reward_amt, gmail, password, ss_file_id, is_checked, auto_approve_time, sended_buyer FROM new_gmail_tasks WHERE status IN ('SUBMITTED', 'CHECKED') ORDER BY id ASC LIMIT 1", fetch='one')
+            
+        if not task:
+            try: bot.answer_callback_query(call.id, "✅ No pending New Gmail tasks left!", show_alert=True)
+            except: pass
+            call.data = "adm_panel_dash"
+            return callback_query(call)
+            
+        tid, tgt, amt, t_gmail, t_pass, file_id, is_chk, auto_time, is_snd = task
+        
+        orig_markup = InlineKeyboardMarkup()
+        if not is_snd: orig_markup.row(InlineKeyboardButton("📤 Sended To Buyer", callback_data=f"ngmbuyer_{tid}_{tgt}"))
+        if not is_chk: orig_markup.row(InlineKeyboardButton("👁️ Checked", callback_data=f"ngmchecked_{tid}_{tgt}"))
+        orig_markup.row(InlineKeyboardButton(f"✅ Appr (₹{amt})", callback_data=f"ngmappr_{amt}_{tid}_{tgt}"))
+        orig_markup.row(InlineKeyboardButton("❌ Quick Reject", callback_data=f"ngmrej_{tid}_{tgt}"), InlineKeyboardButton("✍️ Custom Reject", callback_data=f"ngmcustrej_{tid}_{tgt}"))
+        
+        dash_markup = InlineKeyboardMarkup()
+        dash_markup.keyboard = [row[:] for row in orig_markup.keyboard]
+        dash_markup.row(InlineKeyboardButton("⏭️ Next Pending Task", callback_data=f"review_pend_gmail_{tid}"))
+        dash_markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+        
+        caption = f"🔔 <b>REVIEW: NEW GMAIL TASK</b>\n👤 <code>{tgt}</code>\n🔖 Task ID: <code>{tid}</code>\n\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n🔑 <b>Pass:</b> <code>{t_pass}</code>"
+        if is_chk: caption += f"\n\n👁️ STATUS: CHECKED (Auto-Approve {time_left_str(auto_time)})"
+        
+        try: bot.delete_message(user_id, call.message.message_id)
+        except: pass
+        
+        if file_id and file_id != 'none':
+            bot.send_photo(user_id, file_id, caption=caption, parse_mode="HTML", reply_markup=dash_markup)
+        else:
+            bot.send_message(user_id, caption, parse_mode="HTML", reply_markup=dash_markup)
+        return
+
+    elif data.startswith("review_pend_man") and is_admin(user_id):
+        parts = data.split("_")
+        last_id = int(parts[3]) if len(parts) > 3 else 0
+        
+        task = run_query("SELECT id, user_id, task_type, gmail, password, ss_file_id, is_checked, auto_approve_time, sended_buyer, reward_amt FROM manual_gmail_tasks WHERE status IN ('SUBMITTED', 'CHECKED') AND id > %s ORDER BY id ASC LIMIT 1", (last_id,), fetch='one')
+        if not task:
+            task = run_query("SELECT id, user_id, task_type, gmail, password, ss_file_id, is_checked, auto_approve_time, sended_buyer, reward_amt FROM manual_gmail_tasks WHERE status IN ('SUBMITTED', 'CHECKED') ORDER BY id ASC LIMIT 1", fetch='one')
+            
+        if not task:
+            try: bot.answer_callback_query(call.id, "✅ No pending Old/Create Gmail tasks left!", show_alert=True)
+            except: pass
+            call.data = "adm_panel_dash"
+            return callback_query(call)
+            
+        tid, tgt, ttype, t_gmail, t_pass, file_id, is_chk, auto_time, is_snd, amt = task
+        
+        orig_markup = InlineKeyboardMarkup()
+        if not is_snd: orig_markup.row(InlineKeyboardButton("📤 Sended To Buyer", callback_data=f"manbuyer_{tid}"))
+        if not is_chk: orig_markup.row(InlineKeyboardButton("👁️ Checked", callback_data=f"manchecked_{tid}"))
+        orig_markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"manappr_{tid}"))
+        orig_markup.row(InlineKeyboardButton("❌ Quick Reject", callback_data=f"manrej_{tid}"), InlineKeyboardButton("✍️ Custom Reject", callback_data=f"mancustrej_{tid}"))
+        
+        dash_markup = InlineKeyboardMarkup()
+        dash_markup.keyboard = [row[:] for row in orig_markup.keyboard]
+        dash_markup.row(InlineKeyboardButton("⏭️ Next Pending Task", callback_data=f"review_pend_man_{tid}"))
+        dash_markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+        
+        caption = f"🔔 <b>REVIEW: {ttype} GMAIL TASK</b>\n👤 <code>{tgt}</code>\n🔖 Task ID: <code>{tid}</code>\n\n📧 <b>Gmail:</b> <code>{t_gmail}</code>\n🔑 <b>Pass:</b> <code>{t_pass}</code>"
+        if is_chk: caption += f"\n\n👁️ STATUS: CHECKED (Auto-Approve {time_left_str(auto_time)})"
+        
+        try: bot.delete_message(user_id, call.message.message_id)
+        except: pass
+        
+        if file_id and file_id != 'none':
+            bot.send_photo(user_id, file_id, caption=caption, parse_mode="HTML", reply_markup=dash_markup)
+        else:
+            bot.send_message(user_id, caption, parse_mode="HTML", reply_markup=dash_markup)
+        return
+
+    elif data.startswith("review_pend_map") and is_admin(user_id):
+        parts = data.split("_")
+        last_id = int(parts[3]) if len(parts) > 3 else 0
+        
+        task = run_query("SELECT id, assigned_to, ss_file_id, is_checked, auto_approve_time, link, review_text, reward_amt FROM map_tasks WHERE status IN ('SUBMITTED', 'CHECKED') AND id > %s ORDER BY id ASC LIMIT 1", (last_id,), fetch='one')
+        if not task:
+            task = run_query("SELECT id, assigned_to, ss_file_id, is_checked, auto_approve_time, link, review_text, reward_amt FROM map_tasks WHERE status IN ('SUBMITTED', 'CHECKED') ORDER BY id ASC LIMIT 1", fetch='one')
+            
+        if not task:
+            try: bot.answer_callback_query(call.id, "✅ No pending Map tasks left!", show_alert=True)
+            except: pass
+            call.data = "adm_panel_dash"
+            return callback_query(call)
+            
+        tid, tgt, file_id, is_chk, auto_time, t_link, t_txt, amt = task
+        
+        orig_markup = InlineKeyboardMarkup()
+        if not is_chk: orig_markup.row(InlineKeyboardButton("👁️ Checked", callback_data=f"mapchecked_{tid}"))
+        orig_markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"mappr_{tid}"), InlineKeyboardButton("❌ Reject", callback_data=f"mrej_{tid}"))
+        
+        dash_markup = InlineKeyboardMarkup()
+        dash_markup.keyboard = [row[:] for row in orig_markup.keyboard]
+        dash_markup.row(InlineKeyboardButton("⏭️ Next Pending Task", callback_data=f"review_pend_map_{tid}"))
+        dash_markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+        
+        caption = f"🗺️ <b>REVIEW: MAP TASK</b>\n👤 <code>{tgt}</code>\n🔖 Task ID: <code>{tid}</code>\n\n🔗 <b>Link:</b>\n{t_link}\n\n💬 <b>Text:</b>\n<code>{t_txt}</code>"
+        if is_chk: caption += f"\n\n👁️ STATUS: CHECKED (Auto-Approve {time_left_str(auto_time)})"
+        
+        try: bot.delete_message(user_id, call.message.message_id)
+        except: pass
+        
+        if file_id and file_id != 'none':
+            bot.send_photo(user_id, file_id, caption=caption, parse_mode="HTML", reply_markup=dash_markup)
+        else:
+            bot.send_message(user_id, caption, parse_mode="HTML", reply_markup=dash_markup)
+        return
+
+    elif data.startswith("review_pend_wd") and is_admin(user_id):
+        parts = data.split("_")
+        last_id = int(parts[3]) if len(parts) > 3 else 0
+        
+        req = run_query("SELECT id, user_id, amount, method, address FROM pending_withdraws WHERE id > %s ORDER BY id ASC LIMIT 1", (last_id,), fetch='one')
+        if not req:
+            req = run_query("SELECT id, user_id, amount, method, address FROM pending_withdraws ORDER BY id ASC LIMIT 1", fetch='one')
+            
+        if not req:
+            try: bot.answer_callback_query(call.id, "✅ No pending withdrawals left!", show_alert=True)
+            except: pass
+            call.data = "adm_panel_dash"
+            return callback_query(call)
+            
+        pid, t_user, amt, meth, addr = req
+        safe_addr = str(addr).replace('<', '&lt;').replace('>', '&gt;')
+        
+        orig_markup = InlineKeyboardMarkup()
+        orig_markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"apprw_{pid}"))
+        orig_markup.row(InlineKeyboardButton("❌ Quick Reject", callback_data=f"rejwd_{pid}"), InlineKeyboardButton("✍️ Custom Reject", callback_data=f"custrejwd_{pid}"))
+        
+        dash_markup = InlineKeyboardMarkup()
+        dash_markup.keyboard = [row[:] for row in orig_markup.keyboard]
+        dash_markup.row(InlineKeyboardButton("⏭️ Next Pending Withdraw", callback_data=f"review_pend_wd_{pid}"))
+        dash_markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
+        
+        caption = f"🔔 <b>REVIEW: PAYOUT REQUEST</b>\n👤 <code>{t_user}</code>\n🔖 ID: <code>{pid}</code>\n🏦 {meth}\n💰 {amt}\n📌 <code>{safe_addr}</code>"
+        
+        try: bot.delete_message(user_id, call.message.message_id)
+        except: pass
+        bot.send_message(user_id, caption, parse_mode="HTML", reply_markup=dash_markup)
+        return
+
+    # ==========================================
     # WALLET & WITHDRAW NEW INLINE HANDLERS
     # ==========================================
     if data == "req_withdraw":
