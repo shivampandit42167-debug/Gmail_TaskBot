@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 # ==========================================
 # CONFIGURATION & INITIALIZATION SECTION
 # ==========================================
+# ⚠️ SECURITY TIP: Token aur DB Link ko future me environment variables (.env) me zaroor chupayein.
 TOKEN = '8683212510:AAEdE8kq5-5GuKerfPa_Mzaxovgb-J5VU4w'
 OWNER_ID = 8894779077  
 ADMIN_USERNAME = 'Raka_01'  
@@ -100,6 +101,8 @@ def init_db():
     run_query('''CREATE TABLE IF NOT EXISTS pending_withdraws (id SERIAL PRIMARY KEY, user_id BIGINT, method TEXT, address TEXT, amount FLOAT)''', commit=True)
     run_query('''ALTER TABLE pending_withdraws ADD COLUMN IF NOT EXISTS admin_chat_id BIGINT''', commit=True)
     run_query('''ALTER TABLE pending_withdraws ADD COLUMN IF NOT EXISTS admin_msg_id BIGINT''', commit=True)
+    # ADDED FEE SYSTEM ORIGINAL AMOUNT RECORDING
+    run_query('''ALTER TABLE pending_withdraws ADD COLUMN IF NOT EXISTS original_amount FLOAT''', commit=True)
     
     run_query('''CREATE TABLE IF NOT EXISTS approved_withdraws (id SERIAL PRIMARY KEY, user_id BIGINT, method TEXT, address TEXT, amount FLOAT, date TEXT)''', commit=True)
     run_query('''CREATE TABLE IF NOT EXISTS admins (user_id BIGINT PRIMARY KEY)''', commit=True)
@@ -692,12 +695,13 @@ def handle_all_messages(message):
 
         elif state == 'admin_wd_reject_reason' and is_admin(user_id):
             pid = state_data['pid']
-            req = run_query("SELECT user_id, amount, method, address, admin_chat_id, admin_msg_id FROM pending_withdraws WHERE id=%s", (pid,), fetch='one')
+            req = run_query("SELECT user_id, amount, method, address, admin_chat_id, admin_msg_id, original_amount FROM pending_withdraws WHERE id=%s", (pid,), fetch='one')
             if req:
-                t_user, amt, meth, addr, ach, orig_msg = req
-                refund_inr = amt if meth == "🏦 UPI" else amt * USDT_TO_INR_RATE
+                t_user, receive_amt, meth, addr, ach, orig_msg, orig_amt = req
+                orig_amt = orig_amt if orig_amt else receive_amt
+                refund_inr = orig_amt if meth == "🏦 UPI" else orig_amt * USDT_TO_INR_RATE
                 add_balance(t_user, refund_inr, f"Refund: {meth} Denied")
-                try: bot.send_message(t_user, f"❌ <b>Request Dropped.</b>\nYour payout via {meth} failed administrative clearance.\n💬 Reason: {text.strip()}\nFunds have been reversed to your portfolio.", parse_mode="HTML")
+                try: bot.send_message(t_user, f"❌ <b>Your Withdraw Has Been Rejected Your Money Refunded To Check Wallet</b>\n💬 Reason: {text.strip()}", parse_mode="HTML")
                 except: pass
                 
                 amsg = state_data.get('current_msg_id')
@@ -706,7 +710,7 @@ def handle_all_messages(message):
                 dash_markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
                 
                 safe_addr = str(addr).replace('<', '&lt;').replace('>', '&gt;')
-                caption = f"❌ <b>REFUNDED (Custom Reject)</b>\n👤 <code>{t_user}</code>\n🏦 {meth}\n💰 {amt}\n📌 <code>{safe_addr}</code>\n💬 Reason: {text.strip()}"
+                caption = f"❌ <b>REFUNDED (Custom Reject)</b>\n👤 <code>{t_user}</code>\n🏦 {meth}\n💰 To Pay: {receive_amt}\n📌 <code>{safe_addr}</code>\n💬 Reason: {text.strip()}"
                 
                 update_both(user_id, amsg, ach, orig_msg, caption, dash_markup, None, is_photo=False)
                 run_query("DELETE FROM pending_withdraws WHERE id=%s", (pid,), commit=True)
@@ -1104,7 +1108,6 @@ def handle_all_messages(message):
 
         elif state == 'withdraw_amount':
             try:
-                # Remove commas just in case user types 1,000
                 cleaned_val = text.strip().replace(',', '')
                 val = float(cleaned_val)
                 bal = float(get_balance(user_id))
@@ -1121,6 +1124,13 @@ def handle_all_messages(message):
                         bot.send_message(user_id, f"❌ Insufficient balance! Your balance: ₹{bal:.2f}", reply_markup=main_menu(user_id))
                         del user_states[user_id]
                         return
+                    
+                    # UPI 7% Fee System
+                    fee = val * 0.07
+                    receive_amt = val - fee
+                    msg = (f"Your Selected Amount Is {val}₹\n\n"
+                           f"7% is fee Cut You Received {receive_amt:.2f}₹\n\n"
+                           f"confirm Your Withdraw")
                 else:
                     if val < min_usdt:
                         bot.send_message(user_id, f"❌ Minimum withdrawal for USDT is ${min_usdt}", reply_markup=main_menu(user_id))
@@ -1130,10 +1140,27 @@ def handle_all_messages(message):
                         bot.send_message(user_id, f"❌ Insufficient balance! Your balance: ₹{bal:.2f}", reply_markup=main_menu(user_id))
                         del user_states[user_id]
                         return
+                    
+                    # USDT 0.05$ Fee System
+                    fee = 0.05
+                    receive_amt = val - fee
+                    if receive_amt <= 0:
+                        bot.send_message(user_id, f"❌ Amount too low after {fee}$ fee.", reply_markup=main_menu(user_id))
+                        del user_states[user_id]
+                        return
                         
+                    msg = (f"Your Selected Amount Is {val}$\n\n"
+                           f"{fee}$ is fee Cut You Received {receive_amt:.2f}$\n\n"
+                           f"confirm Your Withdraw")
+
                 user_states[user_id]['amt'] = val
-                user_states[user_id]['state'] = 'withdraw_address'
-                bot.send_message(user_id, f"✅ Amount: {val}\nPlease provide your precise <b>UPI/BP20 Destination Address</b>:", parse_mode="HTML")
+                user_states[user_id]['receive_amt'] = receive_amt
+                
+                markup = InlineKeyboardMarkup()
+                markup.add(InlineKeyboardButton("✅ Confirm", callback_data="confirm_wd"))
+                markup.add(InlineKeyboardButton("❌ Cancel", callback_data="back_to_main"))
+                
+                bot.send_message(user_id, msg, parse_mode="HTML", reply_markup=markup)
             except Exception as e:
                 bot.send_message(user_id, "❌ Please enter a valid numerical amount.", reply_markup=main_menu(user_id))
                 if user_id in user_states: del user_states[user_id]
@@ -1142,24 +1169,25 @@ def handle_all_messages(message):
         elif state == 'withdraw_address':
             try:
                 meth = state_data['method']
-                val = state_data['amt']
+                val = state_data['amt'] # Original Deducted
                 val_inr = val if meth == "🏦 UPI" else val * USDT_TO_INR_RATE
+                receive_amt = state_data['receive_amt'] # Amount user actually gets
                 
-                # HTML SAFE ADDRESS
                 safe_addr = text.strip().replace('<', '&lt;').replace('>', '&gt;')
                 
+                # Cut original amount from user balance
                 deduct_balance(user_id, val_inr, f"Pending {meth} Withdraw ({val})")
                 
-                pid = run_query("INSERT INTO pending_withdraws (user_id, method, address, amount) VALUES (%s, %s, %s, %s) RETURNING id", (user_id, meth, safe_addr, val), fetch='id', commit=True)
+                pid = run_query("INSERT INTO pending_withdraws (user_id, method, address, amount, original_amount) VALUES (%s, %s, %s, %s, %s) RETURNING id", (user_id, meth, safe_addr, receive_amt, val), fetch='id', commit=True)
                 
-                bot.send_message(user_id, "✅ <b>Disbursement Request Logged!</b>\nYour transaction will be processed post administrative clearance.", parse_mode="HTML", reply_markup=main_menu(user_id))
+                bot.send_message(user_id, "✅ <b>Your Withdraw Request Send To Admin Wait For Confirming</b>", parse_mode="HTML", reply_markup=main_menu(user_id))
                 
                 markup = InlineKeyboardMarkup()
-                markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"apprw_{pid}"))
+                markup.row(InlineKeyboardButton("✅ Paid", callback_data=f"apprw_{pid}"))
                 markup.row(InlineKeyboardButton("❌ Quick Reject", callback_data=f"rejwd_{pid}"), InlineKeyboardButton("✍️ Custom Reject", callback_data=f"custrejwd_{pid}"))
                 markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
                 
-                msg_obj = bot.send_message(OWNER_ID, f"🔔 <b>PAYOUT REQUEST</b>\n👤 <code>{user_id}</code>\n🏦 {meth}\n💰 {val}\n📌 <code>{safe_addr}</code>", parse_mode="HTML", reply_markup=markup)
+                msg_obj = bot.send_message(OWNER_ID, f"🔔 <b>PAYOUT REQUEST</b>\n👤 <code>{user_id}</code>\n🏦 {meth}\n💰 To Pay: {receive_amt:.2f}\n📌 <code>{safe_addr}</code>\n<i>User Deducted: {val}</i>", parse_mode="HTML", reply_markup=markup)
                 run_query("UPDATE pending_withdraws SET admin_chat_id=%s, admin_msg_id=%s WHERE id=%s", (OWNER_ID, msg_obj.message_id, pid), commit=True)
             except Exception as e:
                 pass
@@ -1643,7 +1671,7 @@ def callback_query(call):
         safe_addr = str(addr).replace('<', '&lt;').replace('>', '&gt;')
         
         orig_markup = InlineKeyboardMarkup()
-        orig_markup.row(InlineKeyboardButton("✅ Approve", callback_data=f"apprw_{pid}"))
+        orig_markup.row(InlineKeyboardButton("✅ Paid", callback_data=f"apprw_{pid}"))
         orig_markup.row(InlineKeyboardButton("❌ Quick Reject", callback_data=f"rejwd_{pid}"), InlineKeyboardButton("✍️ Custom Reject", callback_data=f"custrejwd_{pid}"))
         
         dash_markup = InlineKeyboardMarkup()
@@ -1651,7 +1679,7 @@ def callback_query(call):
         dash_markup.row(InlineKeyboardButton("⏭️ Next Pending Withdraw", callback_data=f"review_pend_wd_{pid}"))
         dash_markup.row(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
         
-        caption = f"🔔 <b>REVIEW: PAYOUT REQUEST</b>\n👤 <code>{t_user}</code>\n🔖 ID: <code>{pid}</code>\n🏦 {meth}\n💰 {amt}\n📌 <code>{safe_addr}</code>"
+        caption = f"🔔 <b>REVIEW: PAYOUT REQUEST</b>\n👤 <code>{t_user}</code>\n🔖 ID: <code>{pid}</code>\n🏦 {meth}\n💰 To Pay: {amt}\n📌 <code>{safe_addr}</code>"
         
         try: bot.delete_message(user_id, call.message.message_id)
         except: pass
@@ -1979,6 +2007,17 @@ def callback_query(call):
     # ==========================================
     # USER ACTIONS
     # ==========================================
+    elif data == "confirm_wd":
+        if user_id not in user_states or 'amt' not in user_states[user_id]:
+            bot.edit_message_text("❌ Session expired.", user_id, call.message.message_id)
+            return
+        meth = user_states[user_id]['method']
+        user_states[user_id]['state'] = 'withdraw_address'
+        try: bot.delete_message(user_id, call.message.message_id)
+        except: pass
+        bot.send_message(user_id, f"📝 Please provide your precise <b>{meth} ID / Address</b>:", parse_mode="HTML")
+        return
+
     elif data.startswith("betplay_"):
         if user_id not in user_states or user_states[user_id].get('state') != 'wait_bet_side':
             bot.edit_message_text("❌ Action Expired.", user_id, call.message.message_id)
@@ -2504,15 +2543,14 @@ def callback_query(call):
     elif data.startswith("apprw_") and is_admin(user_id): 
         try:
             pid = int(data.split("_")[1])
-            req = run_query("SELECT user_id, amount, method, address, admin_chat_id, admin_msg_id FROM pending_withdraws WHERE id=%s", (pid,), fetch='one')
+            req = run_query("SELECT user_id, amount, method, address, admin_chat_id, admin_msg_id, original_amount FROM pending_withdraws WHERE id=%s", (pid,), fetch='one')
             if req:
-                t_user, amt, meth, addr, ach, amsg = req
+                t_user, receive_amt, meth, addr, ach, amsg, orig_amt = req
                 date_now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
                 insert_check = run_query("INSERT INTO approved_withdraws (user_id, method, address, amount, date) VALUES (%s, %s, %s, %s, %s) RETURNING id", 
-                                         (int(t_user), str(meth), str(addr), float(amt), str(date_now)), fetch='id', commit=True)
+                                         (int(t_user), str(meth), str(addr), float(receive_amt), str(date_now)), fetch='id', commit=True)
                 if insert_check:
-                    curr_symbol = "₹" if meth == "🏦 UPI" else "$"
-                    try: bot.send_message(t_user, f"🎉 <b>FUNDS DISBURSED!</b>\nYour request for {curr_symbol}{amt} via {meth} has been officially fulfilled.", parse_mode="HTML")
+                    try: bot.send_message(t_user, f"🎉 <b>You Withdraw Has Been Paid To Your {meth} Id Check Your Bank</b>\n📌 ID: <code>{addr}</code>", parse_mode="HTML")
                     except: pass
                     
                     dash_markup = InlineKeyboardMarkup()
@@ -2520,7 +2558,7 @@ def callback_query(call):
                     dash_markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
                     
                     safe_addr = str(addr).replace('<', '&lt;').replace('>', '&gt;')
-                    caption = f"✅ <b>APPROVED</b>\n👤 <code>{t_user}</code>\n🏦 {meth}\n💰 {amt}\n📌 <code>{safe_addr}</code>"
+                    caption = f"✅ <b>PAID</b>\n👤 <code>{t_user}</code>\n🏦 {meth}\n💰 Paid: {receive_amt:.2f}\n📌 <code>{safe_addr}</code>"
                     
                     clicked_msg_id = call.message.message_id
                     clicked_chat_id = call.message.chat.id
@@ -2546,12 +2584,13 @@ def callback_query(call):
     elif data.startswith("rejwd_") and is_admin(user_id):
         try:
             pid = int(data.split("_")[1])
-            req = run_query("SELECT user_id, amount, method, address, admin_chat_id, admin_msg_id FROM pending_withdraws WHERE id=%s", (pid,), fetch='one')
+            req = run_query("SELECT user_id, amount, method, address, admin_chat_id, admin_msg_id, original_amount FROM pending_withdraws WHERE id=%s", (pid,), fetch='one')
             if req:
-                t_user, amt, meth, addr, ach, amsg = req
-                refund_inr = amt if meth == "🏦 UPI" else amt * USDT_TO_INR_RATE
+                t_user, receive_amt, meth, addr, ach, amsg, orig_amt = req
+                orig_amt = orig_amt if orig_amt else receive_amt
+                refund_inr = orig_amt if meth == "🏦 UPI" else orig_amt * USDT_TO_INR_RATE
                 add_balance(t_user, refund_inr, f"Refund: {meth} Denied")
-                try: bot.send_message(t_user, f"❌ <b>Request Dropped.</b>\nYour payout via {meth} failed administrative clearance. Funds have been reversed to your portfolio.", parse_mode="HTML")
+                try: bot.send_message(t_user, f"❌ <b>Your Withdraw Has Been Rejected Your Money Refunded To Check Wallet</b>", parse_mode="HTML")
                 except: pass
                 
                 dash_markup = InlineKeyboardMarkup()
@@ -2559,7 +2598,7 @@ def callback_query(call):
                 dash_markup.add(InlineKeyboardButton("🔙 Dashboard", callback_data="adm_panel_dash"))
                 
                 safe_addr = str(addr).replace('<', '&lt;').replace('>', '&gt;')
-                caption = f"❌ <b>REFUNDED (Quick Reject)</b>\n👤 <code>{t_user}</code>\n🏦 {meth}\n💰 {amt}\n📌 <code>{safe_addr}</code>"
+                caption = f"❌ <b>REFUNDED (Quick Reject)</b>\n👤 <code>{t_user}</code>\n🏦 {meth}\n💰 To Pay: {receive_amt}\n📌 <code>{safe_addr}</code>"
                 
                 clicked_msg_id = call.message.message_id
                 clicked_chat_id = call.message.chat.id
